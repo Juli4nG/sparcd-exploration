@@ -14,6 +14,21 @@ complete. Tagging is deferred to
 empty `observations.csv` so downstream tools have a stable canonical base
 file to hash.
 
+## Design references
+
+The Claude Design bundle is the source of truth for layout, copy, and
+component behavior; this plan is the source of truth for data, safety, and
+persistence contracts. Read both side-by-side.
+
+- **Latest Claude Design bundle** (Uploader, post rev-4 — simplified login):
+  <https://api.anthropic.com/v1/design/h/UIxTk3s58j290-DB649lmw?open_file=SPARCd+Uploader.html>
+  Each iteration produces a new URL; update this entry when a newer build
+  supersedes it. The Connection screen is **shared** with the Tagger; both
+  bundles include the same Connection component.
+- [`../../docs/design-system-field-notebook.md`](../../docs/design-system-field-notebook.md)
+  — locked Field Notebook v2 tokens, typography, controls, and the walnut
+  dark variant.
+
 ## Goal
 
 A researcher can drag a folder of camera-trap images into the browser,

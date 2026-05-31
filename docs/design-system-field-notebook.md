@@ -102,7 +102,21 @@ tools; only the chrome label ("SPARC'd · Tagger" / "· Uploader") changes.
   band, sticky 13px mono table.
 
 New tools (sparcd-tagger, sparcd-uploader) extend this same language to
-their own screens; see each tool's `design-prompt.md`.
+their own screens — see the latest Claude Design bundles below.
+
+## Latest Claude Design bundles
+
+These are the canonical mocks each tool's plan implements against. Each
+iteration produces a new URL — update these entries when a newer build
+supersedes them.
+
+- **Uploader** —
+  <https://api.anthropic.com/v1/design/h/UIxTk3s58j290-DB649lmw?open_file=SPARCd+Uploader.html>
+- **Tagger** —
+  <https://api.anthropic.com/v1/design/h/13csaw3-7eZU_pYtJkQGwQ?open_file=SPARCd+Tagger.html>
+
+The Connection screen is **shared**; both bundles include the same
+three-field component.
 
 ## Dark variant
 

@@ -10,6 +10,21 @@ shape they ingest. It does **not** overwrite the canonical upload-level
 `observations.csv`; it writes append-only versions that a later importer,
 review step, or updated reader can merge into canonical data.
 
+## Design references
+
+The Claude Design bundle is the source of truth for layout, copy, and
+component behavior; this plan is the source of truth for data, safety, and
+persistence contracts. Read both side-by-side.
+
+- **Latest Claude Design bundle** (Tagger, post rev-4 — time correction +
+  simplified login):
+  <https://api.anthropic.com/v1/design/h/13csaw3-7eZU_pYtJkQGwQ?open_file=SPARCd+Tagger.html>
+  Each iteration produces a new URL; update this entry when a newer build
+  supersedes it.
+- [`../../docs/design-system-field-notebook.md`](../../docs/design-system-field-notebook.md)
+  — locked Field Notebook v2 tokens, typography, controls, and the walnut
+  dark variant.
+
 ## Goal
 
 A keyboard-driven tagging UI that a researcher can open in a browser, tag
