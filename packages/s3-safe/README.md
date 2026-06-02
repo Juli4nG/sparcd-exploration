@@ -6,37 +6,72 @@ touches storage imports this; application code never constructs an
 
 ## Guarantees
 
-1. **Bucket allowlist** — `SafeS3Client` requires a non-empty allowlist at
-   construction (exact names or `*`-globs). Every method validates the bucket
-   before any network call and throws `BucketNotAllowedError` otherwise.
-2. **Read methods + one append-only writer:**
+1. **Two bucket allowlists.** `SafeS3Client(cfg, readAllowlist, writeAllowlist?)`
+   requires a non-empty **read** allowlist (exact names or `*`-globs). The
+   **write** allowlist is a separate argument, **empty by default**: with no
+   grant, every write throws `BucketNotWritableError` before any network call.
+   This is the hard stop against writing to a production bucket — reads can be
+   broad (`sparcd-*`) while writes stay pinned to named test buckets. Reads
+   that miss the read allowlist still throw `BucketNotAllowedError`.
+2. **Read methods + two append-only writers:**
    - `listObjects(bucket, prefix?)` → `AsyncIterable<ObjectInfo>`
    - `getObject(bucket, key)` → `Uint8Array`
-   - `statObject(bucket, key)` → metadata only
+   - `statObject(bucket, key)` → metadata only (used for the HEAD verify path)
    - `presignedGet(bucket, key, ttlSec)` → URL
    - `writeImmutable(bucket, key, body, opts?)` → conditional `PutObject`
-     with `IfNoneMatch: "*"`
-3. **No destructive APIs** — no `delete*`, `copy*`, or overwriting `put*`.
-   A `no-restricted-imports` lint rule should block `@aws-sdk/client-s3` at
-   the application layer so this wrapper stays the only boundary.
+     for small atomic objects (manifests, CSVs)
+   - `writeImmutableStream(bucket, key, blob, opts)` → per-file streaming
+     write for image blobs; single-PUT or multipart, both conditional
+3. **No destructive APIs** — no `delete*`, `copy*`, overwriting `put*`, and
+   **no `AbortMultipartUpload`**. A failed multipart upload leaves its parts
+   in place; a **bucket lifecycle rule that aborts incomplete multipart
+   uploads after N days (recommend 7) is the only cleanup mechanism and is a
+   mandatory deployment requirement**. A `no-restricted-imports` lint rule
+   should block `@aws-sdk/client-s3` at the application layer so this wrapper
+   stays the only boundary.
 
 ## Conditional writes
 
-`writeImmutable` sends `IfNoneMatch: "*"`. On `412` it throws
-`PreconditionFailedError`; on `501`/`NotImplemented` it throws
-`ConditionalPutUnsupportedError`. It never falls back to a HEAD-then-PUT path
+Both writers send `IfNoneMatch: "*"`. On `412` they throw
+`PreconditionFailedError`; on `501`/`NotImplemented` they throw
+`ConditionalPutUnsupportedError`. Neither falls back to a HEAD-then-PUT path
 — that TOCTOU race cannot be closed safely.
 
-**Backend support (record verified versions here):** AWS S3 added conditional
-`PutObject` in Aug 2024 and bucket-policy enforcement in Nov 2024. MinIO and
-Cloudflare R2 also support conditional PUTs; exact tested versions land here
-once verified against the project endpoints.
+### `writeImmutableStream` and the multipart-complete spike (P4)
+
+`writeImmutableStream` does **not** delegate to `@aws-sdk/lib-storage`'s
+`Upload`. The P4 spike asked whether `Upload` can attach `IfNoneMatch` to the
+**completion** step of a multipart upload. It cannot: `Upload` applies the
+caller's params to `CreateMultipartUpload`, and there is no hook to set a
+header on `CompleteMultipartUpload`. A precondition on *create* does not
+prevent a colliding *complete*, so going through `Upload` would silently lose
+the immutability guarantee on any file large enough to go multipart.
+
+The method therefore orchestrates multipart itself (verified against
+`@aws-sdk/client-s3` ≥ 3.658; `CompleteMultipartUploadRequest.IfNoneMatch`
+is present):
+
+- **Body at or under `partSize`** (default 8 MiB) → one `PutObject` with
+  `IfNoneMatch: "*"`.
+- **Larger** → `CreateMultipartUpload` → `UploadPart` (lazy `Blob.slice`
+  parts, bounded internal concurrency) → `CompleteMultipartUpload` with
+  `IfNoneMatch: "*"`.
+
+The precomputed SHA-256 is always written as `x-amz-meta-sha256`. The native
+`x-amz-checksum-sha256` header is opt-in (`nativeChecksum`) because backend
+support is uneven; the portable verification path is a `HEAD` confirming
+`Content-Length` and `x-amz-meta-sha256`.
+
+**Backend enforcement (record verified versions here):** AWS S3 added
+conditional `PutObject` (Aug 2024), bucket-policy enforcement (Nov 2024), and
+conditional `CompleteMultipartUpload` (separately). MinIO and Cloudflare R2
+also support conditional PUTs; **live enforcement of the conditional complete
+on the project's MinIO endpoint is still a P4 deployment gate** — until proven
+on the target backend, treat the multipart immutability guarantee as
+unverified there.
 
 ## Notes
 
 - `detectBackendDefaults` (region / path-style / secure inference) lives in
   `@sparcd/types` because it is pure string logic shared with `@sparcd/auth-ui`,
   which must not pull in the AWS SDK. This wrapper re-exports it.
-- `writeImmutableStream` (per-file streaming over `@aws-sdk/lib-storage`,
-  used by the uploader) is a **P4** addition and is intentionally not yet
-  present.

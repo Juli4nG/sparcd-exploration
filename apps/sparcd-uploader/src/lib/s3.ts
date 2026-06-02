@@ -18,6 +18,25 @@ function allowlist(): string[] {
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+// Write allowlist: empty by default — wet uploads are refused until a test
+// bucket is named in VITE_S3_WRITE_BUCKETS (comma-separated). Reads stay broad
+// (the `sparcd-*` read allowlist) while writes stay pinned to vetted buckets.
+// This is the env half of the plan's "S3_TEST_BUCKETS, enforced at wrapper
+// construction" safety layer; the production lift is a separate, reviewed step.
+export function writeAllowlist(): string[] {
+  const raw = import.meta.env.VITE_S3_WRITE_BUCKETS as string | undefined;
+  if (!raw) return [];
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/** Whether `bucket` is currently write-enabled (matches the write allowlist). */
+export function isWriteEnabled(bucket: string): boolean {
+  return writeAllowlist().some((pattern) => {
+    const re = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$');
+    return re.test(bucket);
+  });
+}
+
 // Cache the client by a stable identity of the connection so repeated reads
 // (e.g. revisiting Assign) reuse one SDK client.
 let cached: { key: string; client: SafeS3Client } | null = null;
@@ -29,7 +48,7 @@ function configKey(cfg: S3Config): string {
 export function getClient(cfg: S3Config): SafeS3Client {
   const key = configKey(cfg);
   if (cached?.key === key) return cached.client;
-  const client = new SafeS3Client(cfg, allowlist());
+  const client = new SafeS3Client(cfg, allowlist(), writeAllowlist());
   cached = { key, client };
   return client;
 }

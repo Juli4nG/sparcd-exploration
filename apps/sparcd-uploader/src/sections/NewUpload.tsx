@@ -4,18 +4,10 @@ import { StepIndicator } from '../components/StepIndicator';
 import { DropZone } from '../components/DropZone';
 import { FileList } from '../components/FileList';
 import { Assign } from './Assign';
+import { Upload } from './Upload';
 import { formatBytes } from '../lib/scanFiles';
 import { summarize } from '../lib/validation';
 import { ensureProcessing } from '../lib/processing';
-
-function LaterPhase({ title, note }: { title: string; note: string }) {
-  return (
-    <div className="max-w-2xl mx-auto border border-ruleSoft bg-panel px-6 py-10 text-center">
-      <p className="font-display text-[18px] text-ink mb-1">{title}</p>
-      <p className="font-body text-[14px] text-inkSoft">{note}</p>
-    </div>
-  );
-}
 
 export function NewUpload() {
   const step = useStore((s) => s.step);
@@ -103,12 +95,7 @@ export function NewUpload() {
 
       {step === 'assign' && <Assign />}
 
-      {step === 'upload' && (
-        <LaterPhase
-          title="Upload — coming in P4"
-          note="Streaming blob uploads, blob staging, and the completion sentinel land here."
-        />
-      )}
+      {step === 'upload' && <Upload />}
     </div>
   );
 }

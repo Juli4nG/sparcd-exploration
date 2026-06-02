@@ -526,7 +526,7 @@ Smaller than the tagger; this tool is mouse-friendly by nature.
 | **P1** | EXIF parse + SHA-256 hash in Web Workers; thumbnail generation; validation rules; safe user/file key normalization | None |
 | **P2** | Deployment picker reading `Settings/locations.json`; validate exact path, JSON shape, and browser CORS read behavior | Reads only |
 | **P3** | In-memory Camtrap-DP CSV generation; preview `UploadMeta.json`, `UploadComplete.json`, and the three CSVs inline; verify completed shape against an existing Educational Test upload; **verify the existing Java/Next readers actually follow `media.csv`'s `media_path` to a key under `UploadBlobs/` outside the upload prefix** — not just that the CSV shape matches. The marimo explorer presigns whatever `media_path` says, but the Java app may have a hardcoded assumption that image bytes live under the upload prefix; if so, the blob-staging layout needs a coordinated reader update before P4 production-bucket lift. | Reads only |
-| **P4** | Append-only streaming uploads (`writeImmutableStream` via `lib-storage`'s `Upload` — single-PUT or multipart per file) to test bucket; blob staging; final-prefix CSVs; `UploadComplete.json` written last — **only after manual review of `@sparcd/s3-safe` + the upload sequence**, **the `lib-storage` `IfNoneMatch`-on-complete spike** (drop down to manual multipart orchestration if needed; otherwise defer multipart), and **bucket lifecycle rule for incomplete multipart uploads is verified live**; dry-run on by default | First writes, to test bucket |
+| **P4** | Append-only streaming uploads (`writeImmutableStream` — single-PUT or multipart per file; the spike resolved to **manual multipart orchestration**, not `lib-storage`, to keep the conditional complete) to test bucket; blobs **under the upload prefix** (no `UploadBlobs` staging — removed in P3); final-prefix CSVs; `UploadComplete.json` written last — **only after manual review of `@sparcd/s3-safe` + the upload sequence** and **bucket lifecycle rule for incomplete multipart uploads is verified live**; dry-run on by default | First writes, to test bucket |
 | **P5** | Resume on failure: Dexie-tracked file state + persistent handles or reselect-folder reconciliation; **completed-blob skip + interrupted-file restart-from-scratch** (mid-file multipart resume via persisted `UploadId` + `ListParts` is a follow-on, not P5 baseline); size/SHA-256 sanity check | Same as P4 |
 | **P6** | Production-bucket allowlist lift, gated on reader sentinel support and a second review | Same scope as P5 |
 
@@ -731,6 +731,87 @@ last, not by a hidden blob prefix), and the upload order of operations.
 P0–P3 are fully usable as a local-only "prepare an upload bundle" tool
 with no S3 writes. P4 is the first write phase; P6 is the only phase
 that may touch non-test buckets.
+
+### P4 — done (2026-06-02)
+
+The full publish sequence is implemented end-to-end and runnable today in
+**dry-run** (the default and, until the live gates below clear, the only
+enabled path). Wet writes are code-complete but fenced behind an explicit
+write allowlist and the live-verification checklist.
+
+- **Spike settled — multipart conditional-complete via manual orchestration.**
+  The question was whether `@aws-sdk/lib-storage`'s `Upload` can attach
+  `IfNoneMatch` to the multipart **completion** step. It cannot — `Upload`
+  applies caller params to `CreateMultipartUpload` only, and a precondition on
+  *create* does not prevent a colliding *complete*, so routing large files
+  through `Upload` would silently drop the immutability guarantee. So
+  `writeImmutableStream` orchestrates multipart itself. Verified against the
+  resolved `@aws-sdk/client-s3` (3.1058.0): `CompleteMultipartUploadRequest`
+  exposes `IfNoneMatch`, so the conditional complete is reachable. lib-storage
+  is **not** a dependency.
+- **`@sparcd/s3-safe` — `writeImmutableStream` + a second (write) allowlist.**
+  Single conditional `PutObject` for bodies ≤ `partSize` (8 MiB); manual
+  `CreateMultipartUpload` → `UploadPart` (lazy `Blob.slice` parts, bounded
+  internal concurrency) → conditional `CompleteMultipartUpload` above it. Same
+  typed errors as `writeImmutable` (412 → `PreconditionFailedError`, 501 →
+  `ConditionalPutUnsupportedError`). **No `AbortMultipartUpload`** on failure —
+  parts are left for the bucket lifecycle rule, preserving the "no destructive
+  APIs" invariant. SHA-256 is always written as `x-amz-meta-sha256`; the native
+  `x-amz-checksum-sha256` header is opt-in (`nativeChecksum`, off by default,
+  backend-matrix gated). The constructor gained a third arg — a **write
+  allowlist, empty by default** — so a bucket must be explicitly granted before
+  any byte is written (`BucketNotWritableError` otherwise). Reads stay broad
+  (`sparcd-*`); writes stay pinned. README updated with the spike finding and
+  the backend-enforcement gate.
+- **App write wiring (`src/lib/s3.ts`).** The write allowlist is sourced from
+  `VITE_S3_WRITE_BUCKETS` (comma-separated, **empty by default**) and passed to
+  the cached `SafeS3Client`. `isWriteEnabled(bucket)` gates the UI; with no
+  grant the dry-run toggle is forced on and disabled. This is the env half of
+  the plan's "`S3_TEST_BUCKETS`, enforced at wrapper construction" layer.
+- **Orchestrator (`src/lib/upload.ts`).** `runUpload` runs the order of
+  operations exactly: stream blobs under `<uploadPrefix>/<relpath>` (bounded
+  concurrency via a small inline lane pool rather than `p-limit` — lanes lazily
+  pull the next blob so memory stays flat across thousands of files, and a hard
+  failure aborts the in-flight set at once), **exponential backoff with full
+  jitter** on transient failures (network/5xx/429; 412 and access denials are
+  never retried), then a portable **HEAD verify** (size + `x-amz-meta-sha256`)
+  per blob; then the three CSVs; then `UploadMeta.json` (upstream's completion
+  marker, so it lands after blobs + CSVs); then `UploadComplete.json` last. A
+  412 on any final-prefix metadata write triggers the **re-stamp retry**: bump
+  the stamp +1s, rebuild the bundle (new prefix → new keys), retry once, then
+  surface (open question 5 lean). Abandoned blobs are orphans — no deletes,
+  ever. **Dry-run** walks the identical sequence and logs every PUT (bucket,
+  key, size, hash) while writing nothing. `buildBundle` now also returns the
+  per-file upload plan (`items`) so the orchestrator streams the exact bundle
+  the Assign preview shows.
+- **Upload step UI (`src/sections/Upload.tsx`).** Replaces the P4 placeholder:
+  dry-run toggle (default on, forced when the target bucket isn't write-enabled,
+  with the gating note), concurrency slider 4–16 (default 8), per-file
+  virtualized progress list (state dot + mini bar), aggregate bar + byte
+  counts + state tallies, a live event/PUT log, completion summary (prefix +
+  bundle hash), Cancel, and **Next batch** (keeps deployment, uploader, target
+  collection, and description). Store gained `dryRun`, `uploadConcurrency`, and
+  `nextBatch`.
+
+**Still required before wet writes are enabled (live gates, not codeable here —
+open question 2's "first test bucket" is still unanswered):**
+
+1. A concrete write-allowed **test bucket** named in `VITE_S3_WRITE_BUCKETS`.
+2. **Live backend enforcement** of conditional `PutObject` *and* conditional
+   `CompleteMultipartUpload` on the target MinIO endpoint (the multipart
+   guarantee is unverified there until proven).
+3. The **bucket lifecycle rule** that aborts incomplete multipart uploads
+   (recommend 7 days) — the only orphan-part cleanup, since the wrapper never
+   aborts.
+4. The **multipart-write CORS preflight** (PUT/POST + the `x-amz-*` request
+   headers and `ETag`/`x-amz-checksum-*` exposed response headers), separate
+   from P2's read CORS preflight.
+5. The recorded **manual review** of `@sparcd/s3-safe` + the upload sequence.
+
+Deferred to P5 as planned: Dexie-backed resume (completed-blob skip across
+restarts, reselect-folder reconciliation) — v0 keeps run state in memory, so a
+closed tab restarts the batch. A blob-key 412 mid-run is treated as
+"already present / skip" (the forward hook for resume) rather than a failure.
 
 ## Open questions for before P0
 

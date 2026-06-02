@@ -36,6 +36,8 @@ type UploaderState = {
   selectedLocationKey: string | null; // chosen deployment location key (Assign)
   selectedBucket: string | null; // target collection bucket (Assign)
   uploadDescription: string; // free-text description for UploadMeta
+  dryRun: boolean; // on by default; logs PUTs and writes nothing
+  uploadConcurrency: number; // parallel blob lanes, 4–16
 
   connect: (config: S3Config) => void;
   disconnect: () => void;
@@ -53,6 +55,9 @@ type UploaderState = {
   setSelectedLocationKey: (key: string | null) => void;
   setSelectedBucket: (bucket: string | null) => void;
   setUploadDescription: (value: string) => void;
+  setDryRun: (value: boolean) => void;
+  setUploadConcurrency: (value: number) => void;
+  nextBatch: () => void;
 };
 
 const toEntry = (f: ScannedFile): FileEntry => ({ ...f, processState: 'queued' });
@@ -71,6 +76,8 @@ export const useStore = create<UploaderState>((set) => ({
   selectedLocationKey: null,
   selectedBucket: null,
   uploadDescription: '',
+  dryRun: true,
+  uploadConcurrency: 8,
 
   connect: (config) => set({ s3Config: config }),
   disconnect: () =>
@@ -135,4 +142,17 @@ export const useStore = create<UploaderState>((set) => ({
   setSelectedLocationKey: (key) => set({ selectedLocationKey: key }),
   setSelectedBucket: (bucket) => set({ selectedBucket: bucket }),
   setUploadDescription: (value) => set({ uploadDescription: value }),
+  setDryRun: (value) => set({ dryRun: value }),
+  setUploadConcurrency: (value) => set({ uploadConcurrency: value }),
+
+  // Start a fresh batch after a completed upload, keeping the deployment,
+  // uploader, target collection, and description so a researcher can chain
+  // batches for the same site without re-entering everything.
+  nextBatch: () =>
+    set((s) => ({
+      files: [],
+      validations: {},
+      step: 'drop',
+      batchToken: s.batchToken + 1,
+    })),
 }));

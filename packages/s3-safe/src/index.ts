@@ -1,13 +1,22 @@
 // The single, blessed S3 boundary. Every tool that touches storage imports
 // this. It enforces guardrails the application code cannot bypass:
 //
-//   1. Bucket allowlist — validated at construction and on every call.
-//   2. Read methods only, plus one append-only writer (`writeImmutable`).
-//   3. No destructive APIs — no delete*, copy*, or overwriting put*.
+//   1. Bucket allowlists — validated at construction and on every call.
+//      Reads check the read allowlist; writes check a *separate*, opt-in
+//      write allowlist that is empty by default. A bucket must be explicitly
+//      granted before any byte can be written to it.
+//   2. Read methods only, plus two append-only writers: `writeImmutable`
+//      (small atomic objects) and `writeImmutableStream` (per-file streaming).
+//   3. No destructive APIs — no delete*, copy*, overwriting put*, and no
+//      AbortMultipartUpload. Orphan multipart parts are reaped by a bucket
+//      lifecycle rule, never by this wrapper (see ../README.md).
 //
-// `writeImmutableStream` (the uploader's per-file streaming writer over
-// `@aws-sdk/lib-storage`) is a P4 addition and is intentionally absent here.
-// See ../README.md for backend support notes.
+// `writeImmutableStream` (the uploader's P4 streaming writer) does its own
+// multipart orchestration rather than going through `@aws-sdk/lib-storage`'s
+// `Upload`: lib-storage applies the caller's params to CreateMultipartUpload
+// but offers no hook to attach `IfNoneMatch` to the *completion* step, so the
+// conditional guarantee can only be retained by orchestrating the parts here.
+// See ../README.md for the spike finding and backend support notes.
 
 import {
   S3Client,
@@ -16,6 +25,9 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { S3Config } from '@sparcd/types';
@@ -38,11 +50,23 @@ export type ObjectStat = {
   metadata: Record<string, string>;
 };
 
-/** Thrown when a bucket outside the allowlist is touched. */
+/** Thrown when a bucket outside the read allowlist is read. */
 export class BucketNotAllowedError extends Error {
   constructor(bucket: string) {
-    super(`Bucket "${bucket}" is not in the allowlist`);
+    super(`Bucket "${bucket}" is not in the read allowlist`);
     this.name = 'BucketNotAllowedError';
+  }
+}
+
+/**
+ * Thrown when a write targets a bucket outside the *write* allowlist. The
+ * write allowlist is empty by default, so this is the wrapper's hard stop
+ * against accidentally writing to a production (or any non-test) bucket.
+ */
+export class BucketNotWritableError extends Error {
+  constructor(bucket: string) {
+    super(`Bucket "${bucket}" is not in the write allowlist`);
+    this.name = 'BucketNotWritableError';
   }
 }
 
@@ -79,15 +103,72 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`);
 }
 
+// hex SHA-256 → base64, for the native `x-amz-checksum-sha256` header. The
+// app already has the digest as hex (it is what we store in metadata and the
+// manifest), and S3 wants the checksum header base64-encoded.
+function hexToBase64(hex: string): string {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+// Map a conditional-write failure to the wrapper's typed errors. 412 means the
+// key already exists (the precondition fired); 501/NotImplemented means the
+// backend ignored the precondition entirely — in which case the "immutable"
+// guarantee is void and the caller must know, never silently proceed.
+function translateWriteError(err: unknown, key: string): Error {
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  const status = e.$metadata?.httpStatusCode;
+  if (status === 412 || e.name === 'PreconditionFailed') return new PreconditionFailedError(key);
+  if (status === 501 || e.name === 'NotImplemented') return new ConditionalPutUnsupportedError();
+  return err as Error;
+}
+
+export type WriteStreamResult = { etag?: string };
+
+export type WriteStreamOptions = {
+  /** Precomputed hex SHA-256 — stored as `x-amz-meta-sha256` on the object. */
+  sha256: string;
+  contentType?: string;
+  metadata?: Record<string, string>;
+  /** Reports cumulative bytes uploaded for this object. */
+  onProgress?: (loaded: number, total: number) => void;
+  /** Multipart part size in bytes; bodies at or under it use a single PUT. */
+  partSize?: number;
+  /** Parallel parts in flight for one multipart object. */
+  partConcurrency?: number;
+  /**
+   * Also send the native `x-amz-checksum-sha256` header. Off by default —
+   * MinIO/R2 support is uneven, so it is opt-in per the backend matrix in
+   * ../README.md. The portable `x-amz-meta-sha256` is always sent.
+   */
+  nativeChecksum?: boolean;
+  signal?: AbortSignal;
+};
+
+// 8 MiB parts: comfortably above S3's 5 MiB multipart minimum, so any file
+// that needs multipart splits into reasonably few parts.
+const DEFAULT_PART_SIZE = 8 * 1024 * 1024;
+const DEFAULT_PART_CONCURRENCY = 4;
+
 export class SafeS3Client {
   private readonly client: S3Client;
   private readonly allow: RegExp[];
+  private readonly writeAllow: RegExp[];
 
-  constructor(cfg: S3Config, allowlist: string[]) {
+  /**
+   * @param allowlist      buckets readable by this client (non-empty).
+   * @param writeAllowlist buckets writable by this client (empty by default —
+   *                       writes are opt-in and refused until granted).
+   */
+  constructor(cfg: S3Config, allowlist: string[], writeAllowlist: string[] = []) {
     if (allowlist.length === 0) {
-      throw new Error('SafeS3Client requires a non-empty bucket allowlist');
+      throw new Error('SafeS3Client requires a non-empty read allowlist');
     }
     this.allow = allowlist.map(globToRegExp);
+    this.writeAllow = writeAllowlist.map(globToRegExp);
     this.client = new S3Client({
       endpoint: endpointUrl(cfg),
       region: cfg.region,
@@ -100,6 +181,17 @@ export class SafeS3Client {
     if (!this.allow.some((re) => re.test(bucket))) {
       throw new BucketNotAllowedError(bucket);
     }
+  }
+
+  private assertWritable(bucket: string): void {
+    if (!this.writeAllow.some((re) => re.test(bucket))) {
+      throw new BucketNotWritableError(bucket);
+    }
+  }
+
+  /** Buckets this client may write to (resolved names not knowable; returns whether any grant exists). */
+  get canWrite(): boolean {
+    return this.writeAllow.length > 0;
   }
 
   /**
@@ -173,7 +265,7 @@ export class SafeS3Client {
     body: Uint8Array | string,
     opts: { contentType?: string; metadata?: Record<string, string> } = {},
   ): Promise<void> {
-    this.assertAllowed(bucket);
+    this.assertWritable(bucket);
     try {
       await this.client.send(
         new PutObjectCommand({
@@ -186,15 +278,112 @@ export class SafeS3Client {
         }),
       );
     } catch (err) {
-      const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-      const status = e.$metadata?.httpStatusCode;
-      if (status === 412 || e.name === 'PreconditionFailed') {
-        throw new PreconditionFailedError(key);
+      throw translateWriteError(err, key);
+    }
+  }
+
+  /**
+   * Per-file streaming append-only write for image blobs. Bodies at or under
+   * `partSize` go through a single conditional `PutObject`; larger bodies are
+   * orchestrated as a multipart upload whose `CompleteMultipartUpload` carries
+   * the same `IfNoneMatch: "*"` precondition — the conditional guarantee holds
+   * on both paths. The body is a `Blob`/`File`; parts are lazy `Blob.slice`s so
+   * memory stays flat regardless of file size.
+   *
+   * On failure the multipart upload is deliberately **not** aborted — the IAM
+   * policy denies `AbortMultipartUpload` and the bucket lifecycle rule reaps
+   * orphan parts. Same typed errors as `writeImmutable` (412 → already exists,
+   * 501 → backend won't enforce the precondition).
+   */
+  async writeImmutableStream(
+    bucket: string,
+    key: string,
+    body: Blob,
+    opts: WriteStreamOptions,
+  ): Promise<WriteStreamResult> {
+    this.assertWritable(bucket);
+    const total = body.size;
+    const partSize = opts.partSize ?? DEFAULT_PART_SIZE;
+    const metadata = { ...opts.metadata, sha256: opts.sha256 };
+    const checksum = opts.nativeChecksum ? { ChecksumSHA256: hexToBase64(opts.sha256) } : {};
+
+    if (total <= partSize) {
+      try {
+        const res = await this.client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+            IfNoneMatch: '*',
+            ContentType: opts.contentType,
+            Metadata: metadata,
+            ...checksum,
+          }),
+          { abortSignal: opts.signal },
+        );
+        opts.onProgress?.(total, total);
+        return { etag: res.ETag };
+      } catch (err) {
+        throw translateWriteError(err, key);
       }
-      if (status === 501 || e.name === 'NotImplemented') {
-        throw new ConditionalPutUnsupportedError();
+    }
+
+    const create = await this.client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: opts.contentType,
+        Metadata: metadata,
+      }),
+      { abortSignal: opts.signal },
+    );
+    const uploadId = create.UploadId!;
+    const partCount = Math.ceil(total / partSize);
+    const parts = new Array<{ PartNumber: number; ETag: string }>(partCount);
+    let loaded = 0;
+    let nextPart = 0;
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = nextPart++;
+        if (i >= partCount) return;
+        const start = i * partSize;
+        const end = Math.min(start + partSize, total);
+        const res = await this.client.send(
+          new UploadPartCommand({
+            Bucket: bucket,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: i + 1,
+            Body: body.slice(start, end),
+          }),
+          { abortSignal: opts.signal },
+        );
+        parts[i] = { PartNumber: i + 1, ETag: res.ETag! };
+        loaded += end - start;
+        opts.onProgress?.(loaded, total);
       }
-      throw err;
+    };
+
+    // A failing part rejects the whole upload; we leave the parts in place
+    // (no Abort — see the method doc) for the lifecycle rule to clean up.
+    const lanes = Math.min(opts.partConcurrency ?? DEFAULT_PART_CONCURRENCY, partCount);
+    await Promise.all(Array.from({ length: lanes }, worker));
+
+    try {
+      const res = await this.client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          MultipartUpload: { Parts: parts },
+          IfNoneMatch: '*',
+        }),
+        { abortSignal: opts.signal },
+      );
+      return { etag: res.ETag };
+    } catch (err) {
+      throw translateWriteError(err, key);
     }
   }
 }

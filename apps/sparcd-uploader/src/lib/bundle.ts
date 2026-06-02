@@ -23,6 +23,15 @@ import { locationToDeployment, type Location } from './locations';
 import { sanitizeRelPath, resolveCollisions } from './normalize';
 import type { FileEntry } from '../store';
 
+/** One blob to stream: the full object key (= media_path) plus its source. */
+export type UploadItem = {
+  id: string; // FileEntry id
+  key: string; // full S3 object key, identical to media_path
+  file: File;
+  size: number;
+  sha256: string;
+};
+
 export type BundlePreview = {
   uploadPath: string;
   bucket: string;
@@ -34,6 +43,8 @@ export type BundlePreview = {
   observationsCsv: string;
   uploadMetaJson: string;
   uploadCompleteJson: string;
+  /** Per-file upload plan; the orchestrator (P4) streams these to `key`. */
+  items: UploadItem[];
 };
 
 const enc = new TextEncoder();
@@ -97,6 +108,14 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
     };
   });
 
+  const uploadItems: UploadItem[] = ready.map((f, i) => ({
+    id: f.id,
+    key: media[i].mediaPath,
+    file: f.file,
+    size: f.size,
+    sha256: f.sha256!,
+  }));
+
   const deploymentsCsv = serializeDeployments([deployment]);
   const mediaCsv = serializeMedia(media);
   const observationsCsv = serializeObservations([]); // always empty on initial upload
@@ -146,5 +165,6 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
     observationsCsv,
     uploadMetaJson,
     uploadCompleteJson: serializeUploadComplete(complete),
+    items: uploadItems,
   };
 }
