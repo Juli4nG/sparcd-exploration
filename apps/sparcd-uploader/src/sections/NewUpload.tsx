@@ -1,8 +1,11 @@
+import { useEffect, useMemo } from 'react';
 import { useStore } from '../store';
 import { StepIndicator } from '../components/StepIndicator';
 import { DropZone } from '../components/DropZone';
 import { FileList } from '../components/FileList';
 import { formatBytes } from '../lib/scanFiles';
+import { summarize } from '../lib/validation';
+import { ensureProcessing } from '../lib/processing';
 
 function LaterPhase({ title, note }: { title: string; note: string }) {
   return (
@@ -16,9 +19,19 @@ function LaterPhase({ title, note }: { title: string; note: string }) {
 export function NewUpload() {
   const step = useStore((s) => s.step);
   const files = useStore((s) => s.files);
+  const validations = useStore((s) => s.validations);
+  const batchToken = useStore((s) => s.batchToken);
   const resetBatch = useStore((s) => s.resetBatch);
+  const setStep = useStore((s) => s.setStep);
 
-  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+  // Start (or adopt) processing whenever a fresh batch reaches the inspect step.
+  // ensureProcessing is idempotent per batch token, so this is safe to re-run.
+  useEffect(() => {
+    if (step === 'inspect' && files.length > 0) ensureProcessing();
+  }, [step, batchToken, files.length]);
+
+  const totalBytes = useMemo(() => files.reduce((sum, f) => sum + f.size, 0), [files]);
+  const summary = useMemo(() => summarize(files, validations), [files, validations]);
 
   return (
     <div className="px-6 py-6">
@@ -30,10 +43,28 @@ export function NewUpload() {
 
       {step === 'inspect' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <p className="font-body text-[14px] text-inkSoft">
               <span className="font-mono text-ink">{files.length}</span> files ·{' '}
               <span className="font-mono text-ink">{formatBytes(totalBytes)}</span>
+              {summary.pending > 0 && (
+                <>
+                  {' · '}
+                  <span className="font-mono text-inkSoft">{summary.pending}</span> processing
+                </>
+              )}
+              {summary.errors > 0 && (
+                <>
+                  {' · '}
+                  <span className="font-mono text-warn">{summary.errors}</span> need attention
+                </>
+              )}
+              {summary.warnings > 0 && (
+                <>
+                  {' · '}
+                  <span className="font-mono text-warn">{summary.warnings}</span> warnings
+                </>
+              )}
             </p>
             <div className="flex items-center gap-2">
               <button
@@ -43,9 +74,18 @@ export function NewUpload() {
                 Start over
               </button>
               <button
-                disabled
-                title="EXIF, hashing, validation, and assignment arrive in later phases"
-                className="bg-ink text-paper border border-ink px-3.5 py-1.5 text-[14px] font-body font-[600] opacity-40 cursor-not-allowed"
+                disabled={!summary.ready}
+                onClick={() => setStep('assign')}
+                title={
+                  summary.ready
+                    ? 'Continue to assignment'
+                    : summary.pending > 0
+                      ? 'Wait for processing to finish'
+                      : 'Resolve files that need attention first'
+                }
+                className={`bg-ink text-paper border border-ink px-3.5 py-1.5 text-[14px] font-body font-[600] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
+                  summary.ready ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'
+                }`}
               >
                 Continue
               </button>
@@ -53,8 +93,9 @@ export function NewUpload() {
           </div>
           <FileList />
           <p className="font-body text-[13px] text-inkMute">
-            EXIF timestamps, SHA-256 hashing, thumbnails, and per-file validation arrive in P1.
-            Assignment (P2) and upload (P4) follow.
+            EXIF, SHA-256, thumbnails, and validation run in Web Workers. Files needing attention
+            (no EXIF timestamp) get manual entry in Assign (P2); duplicates are warnings you can keep
+            or drop with <span className="font-mono">D</span>.
           </p>
         </div>
       )}

@@ -1,12 +1,102 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useStore } from '../store';
+import { useStore, type FileEntry } from '../store';
 import { formatBytes } from '../lib/scanFiles';
+import type { FileValidation, Severity } from '../lib/validation';
 
-const ROW = 44;
+const ROW = 52;
+const COLS = 'grid-cols-[44px_1fr_150px_92px_84px_128px]';
+
+const SEVERITY_DOT: Record<Severity, string> = {
+  ok: 'bg-ok',
+  warning: 'bg-warn',
+  error: 'bg-warn',
+};
+
+function shortTime(iso?: string): string {
+  if (!iso) return '—';
+  // Render the EXIF instant without imposing a timezone shift on the display.
+  return iso.replace('T', ' ').replace(/\.\d+Z$/, '').replace(/Z$/, '');
+}
+
+function Thumb({ blob }: { blob?: Blob }) {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    if (!blob) return;
+    const u = URL.createObjectURL(blob);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [blob]);
+
+  if (url) {
+    return <img src={url} alt="" className="w-9 h-9 object-cover border border-ruleSoft" />;
+  }
+  return <span className="w-9 h-9 bg-paperHover border border-ruleSoft block" aria-hidden />;
+}
+
+function StatusCell({ entry, validation }: { entry: FileEntry; validation?: FileValidation }) {
+  if (entry.processState === 'queued') return <span className="text-inkMute text-[12px]">Queued</span>;
+  if (entry.processState === 'processing')
+    return <span className="text-inkSoft text-[12px]">Processing…</span>;
+
+  const v = validation ?? { severity: 'ok' as Severity, issues: [] };
+  const label =
+    v.severity === 'error' ? 'Needs attention' : v.severity === 'warning' ? 'Warning' : 'OK';
+  const title = v.issues.map((i) => i.message).join('; ') || 'Valid';
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[12px] text-inkSoft" title={title}>
+      <span className={`w-2 h-2 rounded-full ${SEVERITY_DOT[v.severity]}`} aria-hidden />
+      {label}
+    </span>
+  );
+}
+
+function Row({
+  entry,
+  validation,
+  active,
+  onSelect,
+}: {
+  entry: FileEntry;
+  validation?: FileValidation;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const dims = entry.width && entry.height ? `${entry.width}×${entry.height}` : '—';
+  return (
+    <div
+      onClick={onSelect}
+      className={`grid ${COLS} items-center gap-3 px-3 h-full border-b border-ruleSoft cursor-default ${
+        active ? 'bg-mark' : 'hover:bg-panelHover'
+      }`}
+    >
+      <Thumb blob={entry.thumbnail} />
+      <span className="min-w-0">
+        <span className="block truncate font-mono text-[13px] text-ink" title={entry.relPath}>
+          {entry.fileName}
+        </span>
+        <span
+          className="block truncate font-mono text-[11px] text-inkMute"
+          title={entry.sha256 ? `sha256:${entry.sha256}` : undefined}
+        >
+          {entry.exifCamera ?? (entry.sha256 ? `${entry.sha256.slice(0, 12)}…` : entry.relPath)}
+        </span>
+      </span>
+      <span className="font-mono text-[12px] text-inkSoft truncate" title={entry.exifTimestamp}>
+        {shortTime(entry.exifTimestamp)}
+      </span>
+      <span className="font-mono text-[12px] text-inkSoft text-right">{dims}</span>
+      <span className="font-mono text-[12px] text-inkSoft text-right">{formatBytes(entry.size)}</span>
+      <span className="justify-self-start">
+        <StatusCell entry={entry} validation={validation} />
+      </span>
+    </div>
+  );
+}
 
 export function FileList() {
   const files = useStore((s) => s.files);
+  const validations = useStore((s) => s.validations);
   const removeFile = useStore((s) => s.removeFile);
   const parentRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
@@ -18,12 +108,10 @@ export function FileList() {
     overscan: 12,
   });
 
-  // Keep the active row in view as J/K moves it.
   useEffect(() => {
     if (active < files.length) virtualizer.scrollToIndex(active, { align: 'auto' });
   }, [active, files.length, virtualizer]);
 
-  // Clamp when the batch shrinks (e.g. after D drops a row).
   useEffect(() => {
     if (active >= files.length && files.length > 0) setActive(files.length - 1);
   }, [files.length, active]);
@@ -43,10 +131,15 @@ export function FileList() {
 
   return (
     <div className="border border-rule bg-panel">
-      <div className="grid grid-cols-[44px_1fr_120px] items-center gap-3 px-3 h-9 border-b border-rule font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft">
+      <div
+        className={`grid ${COLS} items-center gap-3 px-3 h-9 border-b border-rule font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft`}
+      >
         <span aria-hidden />
         <span>File</span>
+        <span>Timestamp</span>
+        <span className="text-right">Pixels</span>
         <span className="text-right">Size</span>
+        <span>Status</span>
       </div>
 
       <div
@@ -59,24 +152,18 @@ export function FileList() {
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((vi) => {
             const f = files[vi.index];
-            const isActive = vi.index === active;
             return (
               <div
                 key={f.id}
-                onClick={() => setActive(vi.index)}
-                className={`absolute left-0 right-0 grid grid-cols-[44px_1fr_120px] items-center gap-3 px-3 border-b border-ruleSoft cursor-default ${
-                  isActive ? 'bg-mark' : 'hover:bg-panelHover'
-                }`}
+                className="absolute left-0 right-0"
                 style={{ height: ROW, transform: `translateY(${vi.start}px)` }}
               >
-                {/* Thumbnail placeholder — real thumbnails arrive in P1. */}
-                <span className="w-8 h-8 bg-paperHover border border-ruleSoft" aria-hidden />
-                <span className="min-w-0 truncate font-mono text-[13px] text-ink" title={f.relPath}>
-                  {f.relPath}
-                </span>
-                <span className="text-right font-mono text-[13px] text-inkSoft">
-                  {formatBytes(f.size)}
-                </span>
+                <Row
+                  entry={f}
+                  validation={validations[f.id]}
+                  active={vi.index === active}
+                  onSelect={() => setActive(vi.index)}
+                />
               </div>
             );
           })}

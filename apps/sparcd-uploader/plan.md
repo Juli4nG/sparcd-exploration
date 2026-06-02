@@ -561,6 +561,50 @@ directly rather than wiring shadcn/ui (the components are bespoke — sharp
 corners, hairline rules); `uploaderUser` provenance (open question 1) is not
 needed until P1/P2 and stays open.
 
+### P1 — done (2026-06-02)
+
+EXIF, hashing, thumbnails, and validation now run off the main thread, and
+the key-normalization rules live in one pure module. Still no S3 — entirely
+local.
+
+- **Worker (`src/workers/fileProcessor.worker.ts`)** — one file per message,
+  three results: streamed SHA-256 (`hash-wasm`'s incremental `createSHA256`
+  over `file.stream()`, so memory stays flat across thousands of files), EXIF
+  via `exifr` (`DateTimeOriginal` → `CreateDate` → `ModifyDate` fallback, plus
+  Make/Model and a separate `exifr.gps()` call for decimal coords), and a
+  ≤64-px JPEG thumbnail via `createImageBitmap` + `OffscreenCanvas`. Hash is
+  mandatory (failure → file error); EXIF and thumbnail are best-effort.
+- **Pool (`src/lib/processPool.ts` + `src/lib/processing.ts`)** — bounded pool
+  of `min(cores-1, 6)` workers, refilled as results land. The controller lives
+  in module scope (not a component), keyed on `batchToken`, so processing keeps
+  running across section switches and only restarts when a new batch is
+  scanned. Vite splits the worker (exifr + hash-wasm, ~94 kB) into its own
+  chunk — the main bundle stays lean.
+- **Validation (`src/lib/validation.ts`)** — pure `validateBatch` over the
+  whole batch (SHA-256 dedup is cross-file). `error` blocks the Continue gate
+  (missing EXIF timestamp → "needs attention", unsafe filename, process
+  failure); `warning` is allowed once surfaced (>100 MiB soft ceiling,
+  in-batch duplicate). `summarize` drives the inspect-step counts and gate.
+- **Normalization (`src/lib/normalize.ts`)** — `sanitizeUploaderUser` (slug:
+  lowercase ASCII `[a-z0-9_-]`, runs of disallowed chars → single hyphen),
+  `sanitizeRelPath` (NFC, control chars stripped, separators collapsed, `.`/
+  `..` rejected), and `resolveCollisions` (deterministic short-hash suffix
+  from a content-hash seed). Filename safety is wired into validation now;
+  `sanitizeUploaderUser` has a live home in the Settings identity field;
+  `resolveCollisions` is the forward hook P3 uses for object keys.
+- **UI** — the inspect file list gained thumbnail, camera/hash subline, EXIF
+  timestamp, pixel dimensions, and a per-row status dot (OK / warning / needs
+  attention, issues on hover). Continue is gated on `summary.ready` (nothing
+  pending, no blocking errors) and advances to the P2 Assign placeholder.
+  `J`/`K`/`D` unchanged. Settings now holds the free-text uploader identity
+  with a live key-safe slug preview (open question 1's lean: free text).
+
+Deferred without blocking: the manual-timestamp-entry editor for
+"needs attention" files is surfaced as a clear reason here but the editing
+affordance lands with the Assign step (P2), where per-file metadata editing
+naturally lives. No Dexie yet (resume is P5); thumbnails are kept in memory as
+Blobs and object URLs are created/revoked per visible row.
+
 P0–P3 are fully usable as a local-only "prepare an upload bundle" tool
 with no S3 writes. P4 is the first write phase; P6 is the only phase
 that may touch non-test buckets.
