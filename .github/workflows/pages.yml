@@ -1,10 +1,13 @@
-name: Deploy WASM notebook to GitHub Pages
+name: Deploy tools to GitHub Pages
 
 on:
   push:
     branches: [main]
     paths:
       - "apps/sparcd-explorer/**"
+      - "apps/sparcd-uploader/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -20,21 +23,21 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/sparcd-explorer
     steps:
       - uses: actions/checkout@v4
 
+      # --- Explorer (marimo WASM) -> site root ---
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: latest
 
-      - name: Sync Python deps
+      - name: Sync explorer Python deps
+        working-directory: apps/sparcd-explorer
         run: uv sync
 
       - name: Generate WASM-flavored notebook (prepend PEP 723 deps)
+        working-directory: apps/sparcd-explorer
         run: |
           set -euo pipefail
           {
@@ -42,15 +45,39 @@ jobs:
             cat notebooks/hello.py
           } > notebooks/hello_wasm.py
 
-      - name: Export static WASM bundle
+      - name: Export explorer static WASM bundle
+        working-directory: apps/sparcd-explorer
+        run: uv run marimo export html-wasm notebooks/hello_wasm.py -o dist --mode run --force
+
+      # --- Uploader (Vite) -> /uploader ---
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build uploader
+        run: pnpm --filter sparcd-uploader build
+
+      # --- Assemble combined site ---
+      - name: Assemble site
         run: |
-          uv run marimo export html-wasm notebooks/hello_wasm.py \
-            -o dist --mode run --force
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site/uploader
+          cp -r apps/sparcd-explorer/dist/. _site/
+          cp -r apps/sparcd-uploader/dist/. _site/uploader/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: apps/sparcd-explorer/dist
+          path: _site
 
   deploy:
     needs: build
