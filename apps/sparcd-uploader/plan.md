@@ -605,6 +605,62 @@ affordance lands with the Assign step (P2), where per-file metadata editing
 naturally lives. No Dexie yet (resume is P5); thumbnails are kept in memory as
 Blobs and object URLs are created/revoked per visible row.
 
+### P2 — done (2026-06-02)
+
+The deployment picker reads the camera-location registry from S3 and the Assign
+step is live. First phase to touch S3 — reads only.
+
+- **Registry location (verified live, user-authorized read).**
+  `Settings/locations.json` lives in a **settings bucket**, not the per-collection
+  bucket: prefer `sparcd-settings-*`, fall back to legacy `sparcd`. This
+  deployment uses legacy `sparcd` (no `sparcd-settings-*` exists). The
+  Educational Test collection bucket holds only `Collections/`, so the picker
+  reads a different bucket than uploads target.
+- **Shape + validity (`src/lib/locations.ts`, pure).** A JSON array of
+  `{ nameProperty, idProperty, latProperty, lngProperty, elevationProperty }`,
+  validated per upstream `Location.java`: name/id non-empty, lat ∈ [-85, 85],
+  lng ∈ [-180, 180], elevation ≠ -20000. The document being non-array or
+  non-JSON throws `LocationsShapeError`; individual malformed/invalid entries
+  are partitioned into `skipped` with a reason so one bad row never sinks the
+  picker. Verified against the live 250-entry file and crafted edge cases.
+- **`idProperty` is NOT unique — important data contract.** 15 ids repeat with
+  *different* coordinates/names (e.g. `SAN19` carries both `Mansfield-3` and
+  `*DO NOT USE* Mansfield-3`); upstream keys records by (id, lat, lng).
+  Locations are therefore keyed by a composite `id|lat,lng` and **only exact
+  duplicates collapse** — dedup-by-id alone would silently hide ~16 legitimate,
+  selectable locations. Live result: 250 raw → 249 distinct + 1 exact-dup
+  skipped. `deployment_id` is still `<collection-uuid>:<location-id>` (P3).
+- **S3 wiring.** `src/lib/s3.ts` constructs one cached `SafeS3Client` per
+  connection with a read allowlist (`sparcd`, `sparcd-*`; override
+  `VITE_S3_BUCKETS`), discovers the settings bucket, and fetches + parses the
+  registry. Added `listBuckets()` to `@sparcd/s3-safe` as the discovery
+  primitive — read-only, returns names only, intentionally not allowlist-gated
+  (it cannot read or write object data). TanStack Query (`useLocations`) caches
+  the read across section switches / Assign revisits, keyed on the endpoint.
+- **CORS read behavior.** Read errors are translated into actionable messages:
+  404 → "not found", 403 → "access denied", and a status-less browser fetch
+  failure → an explicit "endpoint unreachable or the bucket CORS policy needs
+  to allow GET/HEAD from this origin" hint. The SDK read is verified
+  server-side; a live in-browser CORS preflight against the endpoint still
+  needs confirming when the app runs in a browser (and the bucket CORS policy
+  may need this origin added — the P4 multipart preflight is separate).
+- **UI (`src/sections/Assign.tsx` + `components/DeploymentPicker.tsx`).** The
+  Assign step replaces the P2 placeholder: a bespoke searchable combobox over
+  the locations (filter by name/id, arrow/Enter/Esc keys, shows id + coords +
+  elevation), the uploader-identity field (prefilled, slug preview, shared with
+  Settings), and the upload-description textarea. Continue is gated on a
+  selected deployment + a non-empty uploader slug, and advances to the P4
+  upload placeholder. Target-collection selection and the five-file metadata
+  preview are honestly marked as landing in P3.
+
+Deferred without blocking: target-collection (bucket) selection and the
+metadata preview move to P3, where the in-memory Camtrap-DP bundle is built;
+the manual-timestamp editor for "needs attention" files (noted in P1) was not
+added here and can land alongside per-file metadata editing. The AWS SDK now
+ships in the main bundle (~460 kB), expected for the first read phase. Open
+question 2 (first test bucket) is still unanswered — it gates P4 writes, not
+P2 reads.
+
 P0–P3 are fully usable as a local-only "prepare an upload bundle" tool
 with no S3 writes. P4 is the first write phase; P6 is the only phase
 that may touch non-test buckets.

@@ -33,6 +33,8 @@ type UploaderState = {
   processing: boolean;
   batchToken: number; // bumps each new batch; identifies a processing run
   uploaderUser: string; // free-text identity, normalized into a slug for keys
+  selectedLocationKey: string | null; // chosen deployment location key (Assign)
+  uploadDescription: string; // free-text description for UploadMeta
 
   connect: (config: S3Config) => void;
   disconnect: () => void;
@@ -47,6 +49,8 @@ type UploaderState = {
   removeFile: (id: string) => void;
   resetBatch: () => void;
   setUploaderUser: (value: string) => void;
+  setSelectedLocationKey: (key: string | null) => void;
+  setUploadDescription: (value: string) => void;
 };
 
 const toEntry = (f: ScannedFile): FileEntry => ({ ...f, processState: 'queued' });
@@ -62,6 +66,8 @@ export const useStore = create<UploaderState>((set) => ({
   processing: false,
   batchToken: 0,
   uploaderUser: '',
+  selectedLocationKey: null,
+  uploadDescription: '',
 
   connect: (config) => set({ s3Config: config }),
   disconnect: () =>
@@ -123,4 +129,6 @@ export const useStore = create<UploaderState>((set) => ({
 
   // Stored raw; sanitizeUploaderUser derives the key-safe slug at point of use.
   setUploaderUser: (value) => set({ uploaderUser: value }),
+  setSelectedLocationKey: (key) => set({ selectedLocationKey: key }),
+  setUploadDescription: (value) => set({ uploadDescription: value }),
 }));

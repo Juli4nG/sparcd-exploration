@@ -11,6 +11,7 @@
 
 import {
   S3Client,
+  ListBucketsCommand,
   ListObjectsV2Command,
   GetObjectCommand,
   HeadObjectCommand,
@@ -99,6 +100,17 @@ export class SafeS3Client {
     if (!this.allow.some((re) => re.test(bucket))) {
       throw new BucketNotAllowedError(bucket);
     }
+  }
+
+  /**
+   * List bucket names. This is the discovery primitive (e.g. finding the
+   * settings bucket) and returns names only, so it is intentionally *not*
+   * gated by the allowlist — the allowlist scopes object operations, and a
+   * caller still cannot read or write a disallowed bucket's objects.
+   */
+  async listBuckets(): Promise<string[]> {
+    const res = await this.client.send(new ListBucketsCommand({}));
+    return (res.Buckets ?? []).map((b) => b.Name!).filter(Boolean);
   }
 
   async *listObjects(bucket: string, prefix?: string): AsyncIterable<ObjectInfo> {

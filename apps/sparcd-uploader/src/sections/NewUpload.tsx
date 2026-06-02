@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { StepIndicator } from '../components/StepIndicator';
 import { DropZone } from '../components/DropZone';
 import { FileList } from '../components/FileList';
+import { Assign } from './Assign';
 import { formatBytes } from '../lib/scanFiles';
 import { summarize } from '../lib/validation';
 import { ensureProcessing } from '../lib/processing';
@@ -100,12 +101,7 @@ export function NewUpload() {
         </div>
       )}
 
-      {step === 'assign' && (
-        <LaterPhase
-          title="Assign — coming in P2"
-          note="Deployment picker, uploader identity, and the metadata preview land here."
-        />
-      )}
+      {step === 'assign' && <Assign />}
 
       {step === 'upload' && (
         <LaterPhase
