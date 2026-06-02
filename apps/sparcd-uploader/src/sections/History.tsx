@@ -7,7 +7,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { formatBytes } from '../lib/scanFiles';
-import { isWriteEnabled, isProductionBucket } from '../lib/s3';
 import {
   listBatches,
   loadSession,
@@ -26,7 +25,6 @@ import {
 import { scanFileList, supportsDirectoryHandle } from '../lib/scanFiles';
 import { resumeUpload, type UploadRun, type UploadSnapshot } from '../lib/upload';
 import { Note, RunMonitor } from '../components/RunMonitor';
-import { ProductionGate } from '../components/ProductionGate';
 
 type Row = { batch: BatchRecord; counts: Record<PersistedFileState, number> };
 
@@ -48,7 +46,6 @@ function Badge({ batch }: { batch: BatchRecord }) {
 export function History() {
   const s3Config = useStore((s) => s.s3Config);
   const concurrency = useStore((s) => s.uploadConcurrency);
-  const productionAck = useStore((s) => s.productionAck);
 
   const [rows, setRows] = useState<Row[] | null>(null);
   const [active, setActive] = useState<string | null>(null); // sessionId being resumed
@@ -123,22 +120,6 @@ export function History() {
         setMessage('Connect to a storage endpoint before resuming.');
         return;
       }
-      if (!isWriteEnabled(batch.targetBucket)) {
-        setMessage(
-          `Wet uploads are disabled for "${batch.targetBucket}" — add it to VITE_S3_WRITE_BUCKETS after the P4 review gates.`,
-        );
-        return;
-      }
-      // P6: a production bucket needs the reader-sentinel + second-review
-      // acknowledgment this session before resume may write. The gate renders
-      // below; once checked, Resume proceeds.
-      if (isProductionBucket(batch.targetBucket) && !productionAck) {
-        setMessage(
-          `"${batch.targetBucket}" is a production bucket — confirm the production gate below before resuming.`,
-        );
-        return;
-      }
-
       // Durable handle: revalidate permission inside this click gesture. The
       // handle is the same folder the bytes came from, so we trust its identity
       // and skip re-hashing; any file the orchestrator can't find is marked
@@ -170,7 +151,7 @@ export function History() {
         reselectRef.current?.click();
       }
     },
-    [s3Config, launch, productionAck],
+    [s3Config, launch],
   );
 
   const onReselectInput = useCallback(
@@ -237,18 +218,6 @@ export function History() {
       />
 
       {message && <Note tone="warn" message={message} />}
-
-      {(() => {
-        // If any open batch targets a write-enabled production bucket, surface
-        // the P6 gate so Resume can proceed once acknowledged this session.
-        const prodBucket = rows.find(
-          ({ batch }) =>
-            !batch.completedAt &&
-            isWriteEnabled(batch.targetBucket) &&
-            isProductionBucket(batch.targetBucket),
-        )?.batch.targetBucket;
-        return prodBucket && !productionAck ? <ProductionGate bucket={prodBucket} /> : null;
-      })()}
 
       {problems.length > 0 && (
         <div className="border border-warn/40 bg-paper px-3 py-2.5 space-y-1">

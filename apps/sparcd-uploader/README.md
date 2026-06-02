@@ -1,25 +1,26 @@
 # sparcd-uploader
 
-A static, browser-based tool for preparing and (later) uploading SPARC'd
-camera-trap image batches. Sits alongside SPARC'd. See [`plan.md`](./plan.md)
-for the full design and phase breakdown.
+A static, browser-based tool for preparing and uploading SPARC'd camera-trap
+image batches. Sits alongside SPARC'd. See [`plan.md`](./plan.md) for the full
+design and phase breakdown.
 
-## Status — P0
+## Status
 
-Local-only scaffold. No S3 reads or writes.
+Runtime-discovered BYO-S3 uploader.
 
 - Shared Connection gate (`@sparcd/auth-ui`) — three fields, endpoint-inferred
   region / path-style / secure behind "Advanced".
 - Tool chrome with section tabs (New upload · History · Settings), upload-state
   pill, and a light/walnut-dark theme toggle.
-- Four-step indicator; **Drop** and **Inspect** are live.
+- Four-step flow: Drop, Inspect, Assign, Upload.
 - Drag-and-drop a folder (or "Choose folder"); recursive JPEG scan via the
   File System Access entries API / `webkitdirectory`.
-- Virtualized file list (`@tanstack/react-virtual`) — filename + size, with
-  `J`/`K` to move and `D` to drop the active file.
-
-EXIF, hashing, thumbnails, and validation are P1; assignment is P2; CSV
-generation is P3; uploads are P4.
+- EXIF, SHA-256, thumbnails, and validation run in Web Workers.
+- The app discovers readable settings buckets by probing for
+  `Settings/locations.json`, and discovers target collections from
+  `Collections/<uuid>/collection.json`.
+- Dry-run is on by default. Wet uploads use the connected credentials directly;
+  IAM and bucket CORS are the real access gates.
 
 ## Develop
 
@@ -38,7 +39,7 @@ TypeScript source (no `dist/`):
 
 - `@sparcd/types` — `S3Config`, `Collection`, `Species`, `UserSession`, and the
   pure `detectBackendDefaults` endpoint inference.
-- `@sparcd/s3-safe` — the single blessed S3 boundary (allowlist + read methods
-  + `writeImmutable`). Not exercised until P2/P4.
+- `@sparcd/s3-safe` — the single blessed S3 boundary (runtime scope + read
+  methods + immutable writers).
 - `@sparcd/auth-ui` — the shared Connection screen.
-- `@sparcd/camtrap` — Camtrap-DP types; reader/writer land in P3.
+- `@sparcd/camtrap` — Camtrap-DP types and CSV/metadata writers.

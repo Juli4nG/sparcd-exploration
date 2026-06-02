@@ -6,9 +6,6 @@ import { DeploymentPicker } from '../components/DeploymentPicker';
 import { MetadataPreview } from '../components/MetadataPreview';
 import { sanitizeUploaderUser } from '../lib/normalize';
 
-// The collection authorized for this workspace; preselected when present.
-const DEFAULT_BUCKET = 'sparcd-8dbd9c43-5c3d-411d-8778-617d4693c69b';
-
 const sectionLabel =
   'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
 
@@ -41,14 +38,17 @@ export function Assign() {
   const collections = useCollections(s3Config);
   const slug = sanitizeUploaderUser(uploaderUser);
 
-  // Preselect the authorized collection (else the first discovered) once.
+  // Preselect the first collection the connected credentials can read.
   useEffect(() => {
-    if (selectedBucket || !collections.data?.length) return;
-    const def = collections.data.find((c) => c.bucket === DEFAULT_BUCKET);
-    setSelectedBucket((def ?? collections.data[0]).bucket);
+    if (!collections.data?.length) return;
+    if (selectedBucket && collections.data.some((c) => c.key === selectedBucket || c.bucket === selectedBucket)) {
+      return;
+    }
+    setSelectedBucket(collections.data[0].key);
   }, [collections.data, selectedBucket, setSelectedBucket]);
 
-  const collection = collections.data?.find((c) => c.bucket === selectedBucket) ?? null;
+  const collection =
+    collections.data?.find((c) => c.key === selectedBucket || c.bucket === selectedBucket) ?? null;
   const collectionName = useCollectionName(s3Config, collection);
   const location = data?.locations.find((l) => l.key === selectedLocationKey) ?? null;
   const canContinue = !!selectedLocationKey && !!slug && !!collection;
@@ -135,26 +135,37 @@ export function Assign() {
         )}
         {collections.data && (
           <div className="space-y-1.5">
-            <select
-              value={selectedBucket ?? ''}
-              onChange={(e) => setSelectedBucket(e.target.value || null)}
-              className="w-full border border-rule bg-paper px-3 py-2 font-mono text-[13px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
-            >
-              {collections.data.map((c) => (
-                <option key={c.bucket} value={c.bucket}>
-                  {c.bucket}
-                </option>
-              ))}
-            </select>
-            <p className="font-body text-[12px] text-inkMute">
-              {collectionName.data ? (
-                <>
-                  <span className="text-inkSoft">{collectionName.data}</span> ·{' '}
-                </>
-              ) : null}
-              Uploads land in this bucket under{' '}
-              <span className="font-mono">Collections/{collection?.uuid ?? '<uuid>'}/Uploads/</span>.
-            </p>
+            {collections.data.length === 0 ? (
+              <LocationsState
+                tone="warn"
+                message="No collection markers found. The connected credentials must be able to list a bucket containing Collections/<uuid>/collection.json, and that bucket must allow this web origin via CORS."
+              />
+            ) : (
+              <>
+                <select
+                  value={selectedBucket ?? ''}
+                  onChange={(e) => setSelectedBucket(e.target.value || null)}
+                  className="w-full border border-rule bg-paper px-3 py-2 font-mono text-[13px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
+                >
+                  {collections.data.map((c) => (
+                    <option key={c.key} value={c.key}>
+                      {c.bucket} · {c.uuid}
+                    </option>
+                  ))}
+                </select>
+                <p className="font-body text-[12px] text-inkMute">
+                  {collectionName.data ? (
+                    <>
+                      <span className="text-inkSoft">{collectionName.data}</span> ·{' '}
+                    </>
+                  ) : null}
+                  Discovered from{' '}
+                  <span className="font-mono">Collections/{collection?.uuid ?? '<uuid>'}/collection.json</span>
+                  . Uploads land in this bucket under{' '}
+                  <span className="font-mono">Collections/{collection?.uuid ?? '<uuid>'}/Uploads/</span>.
+                </p>
+              </>
+            )}
           </div>
         )}
       </section>

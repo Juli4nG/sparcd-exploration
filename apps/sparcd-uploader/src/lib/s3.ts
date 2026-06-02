@@ -1,65 +1,16 @@
-// The app's single point of contact with `@sparcd/s3-safe`. P2 is read-only:
-// discover the settings bucket and fetch `Settings/locations.json`. Writes
-// land in P4. One client is cached per S3Config so TanStack Query and later
-// phases share it instead of reconstructing the AWS SDK client per call.
+// The app's single point of contact with `@sparcd/s3-safe`. This is a static
+// BYO-S3 app: bucket access is discovered at runtime from the connected
+// credentials, not baked into the JS bundle. IAM/CORS and the wrapper's
+// append-only methods are the real safety boundaries.
 
 import { SafeS3Client, BucketNotAllowedError } from '@sparcd/s3-safe';
 import type { S3Config } from '@sparcd/types';
 import { LOCATIONS_KEY, parseLocations, type LocationsParse } from './locations';
 
-// Read allowlist: the settings bucket plus per-collection buckets, all under
-// the `sparcd` family. Override with a comma-separated VITE_S3_BUCKETS.
-// `sparcd-*` covers both `sparcd-settings-*` and the `sparcd-<uuid>` buckets.
-const DEFAULT_ALLOWLIST = ['sparcd', 'sparcd-*'];
-
-function allowlist(): string[] {
-  const raw = import.meta.env.VITE_S3_BUCKETS as string | undefined;
-  if (!raw) return DEFAULT_ALLOWLIST;
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-// Write allowlist: empty by default — wet uploads are refused until a test
-// bucket is named in VITE_S3_WRITE_BUCKETS (comma-separated). Reads stay broad
-// (the `sparcd-*` read allowlist) while writes stay pinned to vetted buckets.
-// This is the env half of the plan's "S3_TEST_BUCKETS, enforced at wrapper
-// construction" safety layer; the production lift is a separate, reviewed step.
-export function writeAllowlist(): string[] {
-  const raw = import.meta.env.VITE_S3_WRITE_BUCKETS as string | undefined;
-  if (!raw) return [];
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-// Production allowlist (P6): the subset of write-enabled buckets that are NOT
-// disposable test buckets. Empty by default. A bucket named here is still only
-// writable if it is also in the write allowlist (the wrapper enforces that), but
-// being flagged production adds a per-session acknowledgment gate in the UI —
-// the operator must confirm the reader-sentinel rollout and the recorded second
-// review are done before any byte lands. This is the in-app surface of safety
-// layer 3's "production lift happens only after a recorded manual review."
-export function prodAllowlist(): string[] {
-  const raw = import.meta.env.VITE_S3_PROD_BUCKETS as string | undefined;
-  if (!raw) return [];
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-// Allowlist entries are exact names or `*`-globs matching any run of non-`/`
-// chars — the same grammar the s3-safe wrapper uses.
-function matchesAny(bucket: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => {
-    const re = new RegExp('^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$');
-    return re.test(bucket);
-  });
-}
-
-/** Whether `bucket` is currently write-enabled (matches the write allowlist). */
-export function isWriteEnabled(bucket: string): boolean {
-  return matchesAny(bucket, writeAllowlist());
-}
-
-/** Whether `bucket` is flagged production (matches the production allowlist). */
-export function isProductionBucket(bucket: string): boolean {
-  return matchesAny(bucket, prodAllowlist());
-}
+// Client-side bucket allowlists are not a security boundary in a static app.
+// They exist only because the wrapper requires an explicit scope; the connected
+// user's IAM policy and bucket CORS decide what the app can actually touch.
+const RUNTIME_BUCKET_SCOPE = ['*'];
 
 // Cache the client by a stable identity of the connection so repeated reads
 // (e.g. revisiting Assign) reuse one SDK client.
@@ -72,23 +23,43 @@ function configKey(cfg: S3Config): string {
 export function getClient(cfg: S3Config): SafeS3Client {
   const key = configKey(cfg);
   if (cached?.key === key) return cached.client;
-  const client = new SafeS3Client(cfg, allowlist(), writeAllowlist());
+  const client = new SafeS3Client(cfg, RUNTIME_BUCKET_SCOPE, RUNTIME_BUCKET_SCOPE);
   cached = { key, client };
   return client;
 }
 
 /**
- * Find the settings bucket the SPARC'd way: prefer a `sparcd-settings-*`
- * bucket, fall back to the legacy `sparcd` bucket. Throws a clear error if
- * neither is visible to these credentials.
+ * Discover buckets that contain `Settings/locations.json`. Name preferences
+ * keep official SPARC'd buckets first, but any readable bucket with the marker
+ * works for BYO-S3 deployments.
  */
-export async function discoverSettingsBucket(client: SafeS3Client): Promise<string> {
+export async function discoverSettingsBuckets(client: SafeS3Client): Promise<string[]> {
   const buckets = await client.listBuckets();
-  const settings = buckets.find((b) => b.startsWith('sparcd-settings-'));
-  if (settings) return settings;
-  if (buckets.includes('sparcd')) return 'sparcd';
+  const found: string[] = [];
+  await Promise.all(
+    buckets.map(async (bucket) => {
+      try {
+        await client.statObject(bucket, LOCATIONS_KEY);
+        found.push(bucket);
+      } catch {
+        // Not a settings bucket, not readable, or blocked by CORS. Keep probing.
+      }
+    }),
+  );
+  return found.sort((a, b) => settingsRank(a) - settingsRank(b) || a.localeCompare(b));
+}
+
+function settingsRank(bucket: string): number {
+  if (bucket.startsWith('sparcd-settings-')) return 0;
+  if (bucket === 'sparcd') return 1;
+  return 2;
+}
+
+export async function discoverSettingsBucket(client: SafeS3Client): Promise<string> {
+  const buckets = await discoverSettingsBuckets(client);
+  if (buckets[0]) return buckets[0];
   throw new Error(
-    'No settings bucket found (looked for "sparcd-settings-*" or legacy "sparcd").',
+    `No readable settings bucket found. The connected credentials must be able to HEAD/GET "${LOCATIONS_KEY}" in one visible bucket, and that bucket must allow this web origin via CORS.`,
   );
 }
 
@@ -114,22 +85,35 @@ export async function fetchLocations(cfg: S3Config): Promise<LocationsResult> {
   return { ...parsed, settingsBucket };
 }
 
-export type CollectionRef = { bucket: string; uuid: string };
+export type CollectionRef = { key: string; bucket: string; uuid: string };
 
-// A per-collection bucket is `sparcd-<uuid>`; the settings bucket (`sparcd`,
-// `sparcd-settings-*`) is not a collection.
-const COLLECTION_BUCKET = /^sparcd-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+const COLLECTION_JSON =
+  /^Collections\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\/collection\.json$/;
 
-/** Discover the collection buckets visible to these credentials (names only). */
+/** Discover collections by looking for `Collections/<uuid>/collection.json`. */
 export async function listCollections(cfg: S3Config): Promise<CollectionRef[]> {
-  const buckets = await getClient(cfg).listBuckets();
-  return buckets
-    .map((b) => {
-      const m = b.match(COLLECTION_BUCKET);
-      return m ? { bucket: b, uuid: m[1] } : null;
-    })
-    .filter((c): c is CollectionRef => c !== null)
-    .sort((a, b) => a.bucket.localeCompare(b.bucket));
+  const client = getClient(cfg);
+  const buckets = await client.listBuckets();
+  const found: CollectionRef[] = [];
+  const seen = new Set<string>();
+  await Promise.all(
+    buckets.map(async (bucket) => {
+      try {
+        for await (const obj of client.listObjects(bucket, 'Collections/')) {
+          const m = obj.key.match(COLLECTION_JSON);
+          if (!m) continue;
+          const uuid = m[1].toLowerCase();
+          const key = `${bucket}::${uuid}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          found.push({ key, bucket, uuid });
+        }
+      } catch {
+        // Bucket is not readable/listable for collections, or CORS blocked it.
+      }
+    }),
+  );
+  return found.sort((a, b) => a.bucket.localeCompare(b.bucket) || a.uuid.localeCompare(b.uuid));
 }
 
 /** Read a collection's display name from its `collection.json`, or null. */

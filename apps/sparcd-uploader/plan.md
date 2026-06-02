@@ -374,12 +374,12 @@ shape as the tagger:
    multipart-write CORS preflight** (separate from P2's read CORS
    preflight) before the first multipart upload is attempted.
 2. **`@sparcd/s3-safe` wrapper** — same single boundary. Same lint rule.
-3. **Bucket allowlist** — `S3_TEST_BUCKETS` env var, enforced at wrapper
-   construction. Production bucket lift happens only after a recorded
-   manual review of: the wrapper, the upload sequence (blob staging,
-   final-prefix sentinel, conditional PUTs, no overwrite paths), reader
-   handling for `UploadComplete.json`, and the dry-run logs from a
-   successful test-bucket run.
+3. **Runtime permissions, not build-time bucket gates** — this is a static
+   BYO-S3 app, so bucket names are never compiled into the bundle as a
+   security boundary. The connected credentials' IAM policy and bucket CORS
+   decide what the browser can read or write. The app discovers readable
+   settings/collection buckets by probing for SPARC'd marker objects, keeps
+   dry-run on by default, and uses only the append-only wrapper APIs.
 4. **Completion sentinel** — `UploadComplete.json` is the final
    coordinating object. If two researchers race for the same timestamp,
    any 412 on a final-prefix metadata object makes the loser abandon that
@@ -528,7 +528,7 @@ Smaller than the tagger; this tool is mouse-friendly by nature.
 | **P3** | In-memory Camtrap-DP CSV generation; preview `UploadMeta.json`, `UploadComplete.json`, and the three CSVs inline; verify completed shape against an existing Educational Test upload; **verify the existing Java/Next readers actually follow `media.csv`'s `media_path` to a key under `UploadBlobs/` outside the upload prefix** — not just that the CSV shape matches. The marimo explorer presigns whatever `media_path` says, but the Java app may have a hardcoded assumption that image bytes live under the upload prefix; if so, the blob-staging layout needs a coordinated reader update before P4 production-bucket lift. | Reads only |
 | **P4** | Append-only streaming uploads (`writeImmutableStream` — single-PUT or multipart per file; the spike resolved to **manual multipart orchestration**, not `lib-storage`, to keep the conditional complete) to test bucket; blobs **under the upload prefix** (no `UploadBlobs` staging — removed in P3); final-prefix CSVs; `UploadComplete.json` written last — **only after manual review of `@sparcd/s3-safe` + the upload sequence** and **bucket lifecycle rule for incomplete multipart uploads is verified live**; dry-run on by default | First writes, to test bucket |
 | **P5** | Resume on failure: Dexie-tracked file state + persistent handles or reselect-folder reconciliation; **completed-blob skip + interrupted-file restart-from-scratch** (mid-file multipart resume via persisted `UploadId` + `ListParts` is a follow-on, not P5 baseline); size/SHA-256 sanity check | Same as P4 |
-| **P6** | Production-bucket allowlist lift, gated on reader sentinel support and a second review | Same scope as P5 |
+| **P6** | Runtime bucket discovery + BYO-S3 portability; remove build-time bucket gates | Same scope as P5 |
 
 ### P0 — done (2026-06-01)
 
@@ -642,12 +642,12 @@ step is live. First phase to touch S3 — reads only.
   selectable locations. Live result: 250 raw → 249 distinct + 1 exact-dup
   skipped. `deployment_id` is still `<collection-uuid>:<location-id>` (P3).
 - **S3 wiring.** `src/lib/s3.ts` constructs one cached `SafeS3Client` per
-  connection with a read allowlist (`sparcd`, `sparcd-*`; override
-  `VITE_S3_BUCKETS`), discovers the settings bucket, and fetches + parses the
-  registry. Added `listBuckets()` to `@sparcd/s3-safe` as the discovery
-  primitive — read-only, returns names only, intentionally not allowlist-gated
-  (it cannot read or write object data). TanStack Query (`useLocations`) caches
-  the read across section switches / Assign revisits, keyed on the endpoint.
+  connection and discovers the settings bucket by probing visible buckets for
+  `Settings/locations.json`. Added `listBuckets()` to `@sparcd/s3-safe` as the
+  discovery primitive — read-only, returns names only, intentionally not
+  allowlist-gated (it cannot read or write object data). TanStack Query
+  (`useLocations`) caches the read across section switches / Assign revisits,
+  keyed on the endpoint and access key.
 - **CORS read behavior.** Read errors are translated into actionable messages:
   404 → "not found", 403 → "access denied", and a status-less browser fetch
   failure → an explicit "endpoint unreachable or the bucket CORS policy needs
@@ -696,12 +696,11 @@ Educational Test upload and the upstream reader behavior confirmed. Reads only.
   the three CSVs via Web Crypto; resolves bundle-relative object names
   (`sanitizeRelPath` + `resolveCollisions` seeded by the content hash) and keys
   each `media_path` to the upload prefix.
-- **Target collection + preview UI.** Assign now discovers collection buckets
-  (`sparcd-<uuid>`, via `listBuckets`), preselects the authorized Educational
-  Test collection, lazily reads the selected collection's `collection.json` for
-  a display name, and renders a tabbed inline preview of all five files
-  (`observations.csv` shown as the empty-file case). Continue is gated on a
-  deployment + target collection + uploader slug.
+- **Target collection + preview UI.** Assign discovers collection markers under
+  `Collections/<uuid>/collection.json`, lazily reads the selected
+  `collection.json` for a display name, and renders a tabbed inline preview of
+  all five files (`observations.csv` shown as the empty-file case). Continue is
+  gated on a deployment + target collection + uploader slug.
 
 - **CRITICAL verification finding — blob layout pivoted to upstream-compatible.**
   P3's required check was whether the existing reader follows `media.csv`'s
@@ -759,15 +758,16 @@ write allowlist and the live-verification checklist.
   APIs" invariant. SHA-256 is always written as `x-amz-meta-sha256`; the native
   `x-amz-checksum-sha256` header is opt-in (`nativeChecksum`, off by default,
   backend-matrix gated). The constructor gained a third arg — a **write
-  allowlist, empty by default** — so a bucket must be explicitly granted before
-  any byte is written (`BucketNotWritableError` otherwise). Reads stay broad
-  (`sparcd-*`); writes stay pinned. README updated with the spike finding and
-  the backend-enforcement gate.
-- **App write wiring (`src/lib/s3.ts`).** The write allowlist is sourced from
-  `VITE_S3_WRITE_BUCKETS` (comma-separated, **empty by default**) and passed to
-  the cached `SafeS3Client`. `isWriteEnabled(bucket)` gates the UI; with no
-  grant the dry-run toggle is forced on and disabled. This is the env half of
-  the plan's "`S3_TEST_BUCKETS`, enforced at wrapper construction" layer.
+  allowlist, empty by default** — so callers must make write scope explicit.
+  For this static uploader the app passes a broad runtime scope (`*`) because
+  client-side allowlists are not security boundaries; IAM/CORS and append-only
+  wrapper methods are. README updated with the spike finding and the
+  backend-enforcement gate.
+- **App write wiring (`src/lib/s3.ts`).** Wet writes are no longer gated by
+  build-time `VITE_*` bucket names. The app discovers target collections from
+  readable `Collections/<uuid>/collection.json` markers and lets the connected
+  credentials attempt the upload. Dry-run stays on by default; wet upload
+  failures surface as IAM/CORS/backend compatibility errors.
 - **Orchestrator (`src/lib/upload.ts`).** `runUpload` runs the order of
   operations exactly: stream blobs under `<uploadPrefix>/<relpath>` (bounded
   concurrency via a small inline lane pool rather than `p-limit` — lanes lazily
@@ -785,28 +785,25 @@ write allowlist and the live-verification checklist.
   per-file upload plan (`items`) so the orchestrator streams the exact bundle
   the Assign preview shows.
 - **Upload step UI (`src/sections/Upload.tsx`).** Replaces the P4 placeholder:
-  dry-run toggle (default on, forced when the target bucket isn't write-enabled,
-  with the gating note), concurrency slider 4–16 (default 8), per-file
+  dry-run toggle (default on), concurrency slider 4–16 (default 8), per-file
   virtualized progress list (state dot + mini bar), aggregate bar + byte
   counts + state tallies, a live event/PUT log, completion summary (prefix +
   bundle hash), Cancel, and **Next batch** (keeps deployment, uploader, target
   collection, and description). Store gained `dryRun`, `uploadConcurrency`, and
   `nextBatch`.
 
-**Still required before wet writes are enabled (live gates, not codeable here —
-open question 2's "first test bucket" is still unanswered):**
+**Operational prerequisites for successful wet writes:**
 
-1. A concrete write-allowed **test bucket** named in `VITE_S3_WRITE_BUCKETS`.
-2. **Live backend enforcement** of conditional `PutObject` *and* conditional
+1. Credentials whose IAM policy permits append-only `PUT`, `HEAD`, `GET`, and
+   `LIST` on the intended settings/collection buckets.
+2. Bucket CORS allowing this static app origin to call the needed S3 methods
+   and headers.
+3. **Live backend enforcement** of conditional `PutObject` *and* conditional
    `CompleteMultipartUpload` on the target MinIO endpoint (the multipart
    guarantee is unverified there until proven).
-3. The **bucket lifecycle rule** that aborts incomplete multipart uploads
+4. The **bucket lifecycle rule** that aborts incomplete multipart uploads
    (recommend 7 days) — the only orphan-part cleanup, since the wrapper never
    aborts.
-4. The **multipart-write CORS preflight** (PUT/POST + the `x-amz-*` request
-   headers and `ETag`/`x-amz-checksum-*` exposed response headers), separate
-   from P2's read CORS preflight.
-5. The recorded **manual review** of `@sparcd/s3-safe` + the upload sequence.
 
 Deferred to P5 as planned: Dexie-backed resume (completed-blob skip across
 restarts, reselect-folder reconciliation) — v0 keeps run state in memory, so a
@@ -863,11 +860,10 @@ Dry runs persist nothing (they write nothing, so there is nothing to resume).
 - **History UI (`src/sections/History.tsx`).** Replaces the placeholder: lists
   every persisted session (newest first) with status badge, date, collection,
   file count, bytes, and live done/failed tallies. Open sessions offer **Resume**
-  (gated on being connected + the target bucket being write-enabled; runs the
-  restore-then-replay flow and shows the shared `RunMonitor`) and every session
-  offers **Discard** (drops the local session row, bundle, and file rows — never
-  touches remote state). The progress/log view was extracted into
-  `components/RunMonitor.tsx`, shared with the New-upload Upload step.
+  (gated on being connected; IAM/CORS decides whether the write succeeds), and
+  every session offers **Discard** (drops the local session row, bundle, and
+  file rows — never touches remote state). The progress/log view was extracted
+  into `components/RunMonitor.tsx`, shared with the New-upload Upload step.
 
 Deferred without blocking: **mid-file multipart resume** (persist `UploadId` +
 part ETags, recover via `ListMultipartUploads`/`ListParts`) stays a follow-on as
@@ -876,54 +872,39 @@ restart whole in v0. Resume requires reconnecting first (secrets are never
 persisted), which matches the plan's reconnect assumption. The reselect path
 re-hashes all path+size matches (not just the not-done subset) to honor the
 SHA-256 reconciliation contract fully; this only runs on the exceptional
-reselect path. Wet resume is still fenced behind the same `VITE_S3_WRITE_BUCKETS`
-allowlist and live gates as P4 — P5 added no new write surface, only state.
+reselect path. P6 later removes build-time bucket gates; resume uses the same
+runtime credentials and wrapper methods as fresh upload.
 
 ### P6 — done (2026-06-02)
 
-The production-bucket lift. P5 already proved out the full write+resume path
-against test buckets; P6 adds the policy layer that lets the uploader write to a
-**production** collection — but only behind a second, deliberate gate on top of
-the P4/P5 write allowlist. No new write mechanics (S3 scope is unchanged from
-P5); this phase is the in-app surface of safety layer 3's "production lift
-happens only after a recorded manual review" plus open question 6's reader
-sentinel rollout.
+Runtime discovery and BYO-S3 portability. This supersedes the earlier
+build-time bucket allowlist idea: because the uploader is a static app, compiled
+`VITE_*` bucket names cannot be treated as a real security boundary and would
+break users who bring their own S3-compatible buckets.
 
-- **Two-tier allowlist (`src/lib/s3.ts`).** A new `VITE_S3_PROD_BUCKETS`
-  allowlist (comma-separated, **empty by default**) names the write-enabled
-  buckets that are *not* disposable test buckets. `isProductionBucket(bucket)`
-  joins the existing `isWriteEnabled(bucket)`; the glob matcher both share was
-  lifted into one `matchesAny` helper. A production bucket must **still** be in
-  `VITE_S3_WRITE_BUCKETS` for the wrapper to permit a byte — the production flag
-  is purely an *additional* gate, never a grant. The `@sparcd/s3-safe` wrapper is
-  unchanged: it still enforces only the write allowlist, so the prod/test
-  distinction is an app-layer policy, not a new wrapper capability.
-- **Per-session acknowledgment (`store.ts`, `components/ProductionGate.tsx`).**
-  Writing to a production bucket forces dry-run until the operator affirms, **this
-  session**, that (1) every reader this project controls ignores upload prefixes
-  without `UploadComplete.json`, and (2) a second review of `@sparcd/s3-safe` +
-  the upload sequence + a successful test-bucket dry-run log is recorded. The ack
-  is session-only store state (`productionAck`) — never persisted, reset on
-  connect / disconnect / nextBatch / resetBatch — so the friction is deliberate
-  rather than sticky. The shared `ProductionGate` component (same pattern as the
-  shared `RunMonitor`) renders the two named gates plus the confirm checkbox.
-- **Wired into both write paths.** New-upload `Upload.tsx`: when the target is a
-  production bucket, `effectiveDryRun` stays forced (and the dry-run checkbox
-  stays locked) until acknowledged, the gate renders inline, and the action reads
-  "Start production upload". History `Upload`/resume `History.tsx`: `beginResume`
-  refuses a production resume until acknowledged, and the gate renders whenever an
-  open batch targets a write-enabled production bucket — so a resumed session
-  faces the same barrier as a fresh one.
-- **`.env.example`** now documents `VITE_S3_BUCKETS`, `VITE_S3_WRITE_BUCKETS`,
-  and the new `VITE_S3_PROD_BUCKETS`, each empty/defaulted with the gate it
-  represents spelled out.
+- **Runtime bucket scope (`src/lib/s3.ts`).** `SafeS3Client` is still the only S3
+  boundary, but the uploader passes broad runtime bucket scope (`*`) for reads
+  and writes. The connected credentials' IAM policy and bucket CORS determine
+  actual access. The wrapper still provides the important safety properties:
+  no delete/copy/overwrite APIs, immutable conditional writes, and portable
+  HEAD verification.
+- **Settings discovery.** The app calls `ListBuckets` and probes visible buckets
+  for `Settings/locations.json`. Official SPARC'd buckets are sorted first when
+  present, but any readable bucket with that marker works.
+- **Collection discovery.** The app scans readable buckets for
+  `Collections/<uuid>/collection.json`; bucket names no longer need to match
+  `sparcd-<uuid>`, and multiple collections can live in one bucket because the
+  selection key is `bucket::uuid`.
+- **Wet upload behavior.** Dry-run remains on by default, but it is no longer
+  forced by missing build-time env vars. A wet run uses the connected
+  credentials directly; failures surface as IAM, CORS, or backend compatibility
+  problems. Resume follows the same model.
+- **Docs direction.** CORS and IAM become operator documentation: provider-
+  specific examples should show how to allow the hosted app origin and grant the
+  append-only S3 actions. The app detects common CORS/read/write failures and
+  points users toward that setup.
 
-`tsc --noEmit` and `vite build` both pass. The remaining production-lift
-prerequisites are operational, not codeable here: the recorded second review,
-the live reader-sentinel rollout across the Java/Next/explorer readers (open
-question 6), and naming the production bucket in both `VITE_S3_WRITE_BUCKETS` and
-`VITE_S3_PROD_BUCKETS`. With those in place the app's gate is the last
-in-product checkpoint before a canonical write.
+`tsc --noEmit` and `vite build` pass for the runtime-discovery implementation.
 
 ## Open questions for before P0
 

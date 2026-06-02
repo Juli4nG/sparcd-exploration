@@ -1,0 +1,17 @@
+- form "Connect to SPARC'd · Uploader" [ref=e4]:
+  - generic [ref=e7]: SPARC'd · Uploader
+  - paragraph [ref=e8]: Connect to an S3-compatible endpoint to begin.
+  - generic [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: Endpoint
+      - textbox "Endpoint" [ref=e12]:
+        - /placeholder: host[:port] or https://host
+        - text: https://wildcats.sparcd.arizona.edu
+    - generic [ref=e13]:
+      - generic [ref=e14]: Access key
+      - textbox "Access key" [ref=e15]
+    - generic [ref=e16]:
+      - generic [ref=e17]: Secret key
+      - textbox "Secret key" [ref=e18]
+  - button "+ Advanced" [ref=e19] [cursor=pointer]
+  - button "Connect" [disabled] [ref=e20]

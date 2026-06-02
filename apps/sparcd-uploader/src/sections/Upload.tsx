@@ -3,11 +3,9 @@ import { useStore } from '../store';
 import { useLocations } from '../lib/useLocations';
 import { useCollections } from '../lib/useCollections';
 import { sanitizeUploaderUser } from '../lib/normalize';
-import { isWriteEnabled, isProductionBucket } from '../lib/s3';
 import { formatBytes } from '../lib/scanFiles';
 import { runUpload, type UploadRun, type UploadSnapshot } from '../lib/upload';
 import { Note, RunMonitor } from '../components/RunMonitor';
-import { ProductionGate } from '../components/ProductionGate';
 
 const sectionLabel = 'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
 
@@ -26,20 +24,15 @@ export function Upload() {
   const nextBatch = useStore((s) => s.nextBatch);
   const fileAccessMode = useStore((s) => s.fileAccessMode);
   const dirHandle = useStore((s) => s.dirHandle);
-  const productionAck = useStore((s) => s.productionAck);
 
   const { data: locData } = useLocations(s3Config);
   const collections = useCollections(s3Config);
 
   const slug = sanitizeUploaderUser(uploaderUser);
   const location = locData?.locations.find((l) => l.key === selectedLocationKey) ?? null;
-  const collection = collections.data?.find((c) => c.bucket === selectedBucket) ?? null;
-  const writeEnabled = !!selectedBucket && isWriteEnabled(selectedBucket);
-  const isProd = !!selectedBucket && isProductionBucket(selectedBucket);
-  // A production bucket stays in dry-run until the operator acknowledges the
-  // reader-sentinel and second-review gates this session (P6).
-  const prodBlocked = isProd && !productionAck;
-  const effectiveDryRun = dryRun || !writeEnabled || prodBlocked;
+  const collection =
+    collections.data?.find((c) => c.key === selectedBucket || c.bucket === selectedBucket) ?? null;
+  const effectiveDryRun = dryRun;
 
   const [snap, setSnap] = useState<UploadSnapshot | null>(null);
   const runRef = useRef<UploadRun | null>(null);
@@ -108,21 +101,19 @@ export function Upload() {
           <input
             type="checkbox"
             checked={effectiveDryRun}
-            disabled={!writeEnabled || prodBlocked || running}
+            disabled={running}
             onChange={(e) => setDryRun(e.target.checked)}
             className="accent-accent"
           />
           Dry run — log every PUT, write nothing
         </label>
 
-        {!writeEnabled && (
+        {!effectiveDryRun && (
           <Note
             tone="warn"
-            message={`Wet uploads are disabled for "${collection.bucket}". Add it to VITE_S3_WRITE_BUCKETS only after the P4 review gates (s3-safe + upload-sequence review, live bucket lifecycle rule for incomplete multipart uploads, and the multipart-write CORS preflight). Dry run is forced until then.`}
+            message={`Wet upload uses the connected credentials directly. The bucket must allow this web origin with CORS, and the credentials must permit append-only PUT/HEAD/LIST for ${collection.bucket}.`}
           />
         )}
-
-        {writeEnabled && isProd && <ProductionGate bucket={collection.bucket} />}
 
         <div className="flex items-center gap-3">
           <label className="font-body text-[13px] text-inkSoft w-28">Concurrency</label>
@@ -177,7 +168,7 @@ export function Upload() {
               onClick={start}
               className="bg-ink text-paper border border-ink px-3.5 py-1.5 text-[14px] font-body font-[600] hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
             >
-              {effectiveDryRun ? 'Start dry run' : isProd ? 'Start production upload' : 'Start upload'}
+              {effectiveDryRun ? 'Start dry run' : 'Start upload'}
             </button>
           )}
         </div>

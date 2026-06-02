@@ -10,7 +10,7 @@ import { fetchLocations, type LocationsResult } from './s3';
  */
 export function useLocations(cfg: S3Config | null) {
   return useQuery<LocationsResult>({
-    queryKey: ['locations', cfg?.endpoint],
+    queryKey: ['locations', cfg?.endpoint, cfg?.accessKey],
     queryFn: () => fetchLocations(cfg!),
     enabled: !!cfg,
     staleTime: 5 * 60 * 1000,

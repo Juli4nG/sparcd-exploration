@@ -5,7 +5,7 @@ import { listCollections, fetchCollectionName, type CollectionRef } from './s3';
 /** List the collection buckets for the connected endpoint (cached per endpoint). */
 export function useCollections(cfg: S3Config | null) {
   return useQuery<CollectionRef[]>({
-    queryKey: ['collections', cfg?.endpoint],
+    queryKey: ['collections', cfg?.endpoint, cfg?.accessKey],
     queryFn: () => listCollections(cfg!),
     enabled: !!cfg,
     staleTime: 5 * 60 * 1000,
@@ -16,7 +16,7 @@ export function useCollections(cfg: S3Config | null) {
 /** Resolve the display name for the selected collection only (lazy, cached). */
 export function useCollectionName(cfg: S3Config | null, ref: CollectionRef | null) {
   return useQuery<string | null>({
-    queryKey: ['collectionName', ref?.bucket],
+    queryKey: ['collectionName', ref?.key],
     queryFn: () => fetchCollectionName(cfg!, ref!),
     enabled: !!cfg && !!ref,
     staleTime: 30 * 60 * 1000,

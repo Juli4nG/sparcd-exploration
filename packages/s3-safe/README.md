@@ -6,13 +6,13 @@ touches storage imports this; application code never constructs an
 
 ## Guarantees
 
-1. **Two bucket allowlists.** `SafeS3Client(cfg, readAllowlist, writeAllowlist?)`
-   requires a non-empty **read** allowlist (exact names or `*`-globs). The
-   **write** allowlist is a separate argument, **empty by default**: with no
-   grant, every write throws `BucketNotWritableError` before any network call.
-   This is the hard stop against writing to a production bucket — reads can be
-   broad (`sparcd-*`) while writes stay pinned to named test buckets. Reads
-   that miss the read allowlist still throw `BucketNotAllowedError`.
+1. **Explicit bucket scope.** `SafeS3Client(cfg, readAllowlist, writeAllowlist?)`
+   requires a non-empty **read** scope (exact names or `*`-globs). The
+   **write** scope is a separate argument, **empty by default**: with no grant,
+   every write throws `BucketNotWritableError` before any network call. In a
+   static BYO-S3 app this scope is not a security boundary — IAM and CORS are.
+   The value is still useful to keep call sites deliberate and to support
+   managed deployments that want narrower client-side scope.
 2. **Read methods + two append-only writers:**
    - `listObjects(bucket, prefix?)` → `AsyncIterable<ObjectInfo>`
    - `getObject(bucket, key)` → `Uint8Array`
