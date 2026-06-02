@@ -813,6 +813,72 @@ restarts, reselect-folder reconciliation) — v0 keeps run state in memory, so a
 closed tab restarts the batch. A blob-key 412 mid-run is treated as
 "already present / skip" (the forward hook for resume) rather than a failure.
 
+### P5 — done (2026-06-02)
+
+Resume on failure is implemented end-to-end. A wet run now persists its session
+to IndexedDB and updates per-file state as blobs land, so a closed tab or a
+flaky connection picks the batch back up instead of re-uploading from scratch.
+Dry runs persist nothing (they write nothing, so there is nothing to resume).
+
+- **Dexie store (`src/lib/db.ts`, schema v1).** Three tables matching the plan:
+  `batches` (`id` = a `crypto.randomUUID` sessionId stable across resume,
+  `uploadPrefix`, `targetBucket`, `deploymentId`, `uploaderUser`/`uploaderSlug`,
+  `collectionUuid`, `description`, `startedAt`, `completedAt`, `totalFiles`,
+  `totalBytes`, `fileAccessMode`, and the structured-cloned `dirHandle`),
+  `files` (keyed `sessionId::localPath`, with `state`,
+  `remoteKey`/`remoteETag`/`attempt`/`lastError` and the recorded `size`/
+  `sha256`/EXIF), and `bundles` (the five serialized payloads +
+  `metadataBundleSha256`). **`blobPrefix` was dropped** as P3 flagged — images
+  live under the upload prefix, so there is no separate blob prefix to record.
+  Versioning uses Dexie's forward-carrying `version(1).stores(...)`; `saveSession`
+  replaces a session's file rows wholesale so a re-stamp (new prefix → new keys)
+  leaves no stale rows.
+- **Durable file access (`src/lib/scanFiles.ts`, `src/lib/resume.ts`).** The
+  "Choose folder" path now prefers `window.showDirectoryPicker` so it can stash a
+  durable `FileSystemDirectoryHandle` (access mode `persistent-handle`);
+  drag-drop and the legacy `<input webkitdirectory>` carry no handle and fall to
+  `reselect-required`. `scanDirectoryHandle` walks a handle and prefixes relPaths
+  with the handle's own name, so paths match the `topFolder/sub/file.jpg` shape
+  the other two scan paths produce — resume reconciliation keys on it.
+- **Resume restore.** `restoreFromHandle` revalidates the stored handle's read
+  permission inside the Resume click gesture (`queryPermission` →
+  `requestPermission`) and re-walks it, trusting identity (no re-hash).
+  `reconcileReselect` is the no-handle path: it matches the reselected folder to
+  the persisted file list by **relative path, size, AND SHA-256** (re-hashed via
+  the existing worker pool), surfacing any mismatch (different folder, edited or
+  renamed image) as a skipped-with-reason problem rather than uploading the wrong
+  bytes. A reselect via the durable picker opportunistically upgrades the session
+  to `persistent-handle` for next time.
+- **Resumable orchestrator (`src/lib/upload.ts`).** Refactored into a shared
+  executor over a `RunPlan`, driven by `runUpload` (fresh, dry or wet) and
+  `resumeUpload` (replay a persisted session). Resume reuses the persisted prefix
+  and keys verbatim: **completed blobs skip after a `statObject` size + recorded
+  `x-amz-meta-sha256` sanity check** (re-uploading on a remote mismatch or a
+  missing object), and **interrupted/pending/failed files restart from scratch**
+  (mid-file multipart resume via persisted `UploadId` + `ListParts` remains a
+  follow-on, not P5 baseline). Because resume owns the prefix, a 412 on a
+  metadata write is treated as "already written, skip" rather than the fresh-run
+  re-stamp. File state is written to Dexie as each blob settles; the batch is
+  marked `completedAt` once `UploadComplete.json` lands.
+- **History UI (`src/sections/History.tsx`).** Replaces the placeholder: lists
+  every persisted session (newest first) with status badge, date, collection,
+  file count, bytes, and live done/failed tallies. Open sessions offer **Resume**
+  (gated on being connected + the target bucket being write-enabled; runs the
+  restore-then-replay flow and shows the shared `RunMonitor`) and every session
+  offers **Discard** (drops the local session row, bundle, and file rows — never
+  touches remote state). The progress/log view was extracted into
+  `components/RunMonitor.tsx`, shared with the New-upload Upload step.
+
+Deferred without blocking: **mid-file multipart resume** (persist `UploadId` +
+part ETags, recover via `ListMultipartUploads`/`ListParts`) stays a follow-on as
+planned — the Dexie hooks (`remoteETag`, `attempt`) exist but interrupted files
+restart whole in v0. Resume requires reconnecting first (secrets are never
+persisted), which matches the plan's reconnect assumption. The reselect path
+re-hashes all path+size matches (not just the not-done subset) to honor the
+SHA-256 reconciliation contract fully; this only runs on the exceptional
+reselect path. Wet resume is still fenced behind the same `VITE_S3_WRITE_BUCKETS`
+allowlist and live gates as P4 — P5 added no new write surface, only state.
+
 ## Open questions for before P0
 
 1. **`uploaderUser` provenance.** Free text vs. tied to S3 access key

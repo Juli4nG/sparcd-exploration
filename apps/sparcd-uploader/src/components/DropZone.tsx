@@ -1,6 +1,13 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../store';
-import { scanDataTransfer, scanFileList, type ScannedFile } from '../lib/scanFiles';
+import {
+  scanDataTransfer,
+  scanDirectoryHandle,
+  scanFileList,
+  pickDirectory,
+  supportsDirectoryHandle,
+  type ScannedFile,
+} from '../lib/scanFiles';
 
 export function DropZone() {
   const setFiles = useStore((s) => s.setFiles);
@@ -9,19 +16,34 @@ export function DropZone() {
   const [hover, setHover] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  async function commit(scan: () => Promise<ScannedFile[]> | ScannedFile[]) {
+  async function commit(
+    scan: () => Promise<ScannedFile[]> | ScannedFile[],
+    dirHandle: FileSystemDirectoryHandle | null = null,
+  ) {
     setScanning(true);
     try {
-      setFiles(await scan());
+      setFiles(await scan(), dirHandle);
     } finally {
       setScanning(false);
     }
+  }
+
+  // Prefer the File System Access picker so we can stash a durable handle for
+  // resume; fall back to the <input webkitdirectory> picker otherwise.
+  async function chooseFolder() {
+    if (supportsDirectoryHandle) {
+      const handle = await pickDirectory();
+      if (handle) void commit(() => scanDirectoryHandle(handle), handle);
+      return;
+    }
+    inputRef.current?.click();
   }
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     setHover(false);
     const items = e.dataTransfer.items;
+    // Drag-drop yields no durable handle, so resume falls back to reselect.
     if (items && items.length) void commit(() => scanDataTransfer(items));
   }
 
@@ -31,11 +53,11 @@ export function DropZone() {
         role="button"
         tabIndex={0}
         aria-label="Drop a folder of JPEGs, or choose a folder"
-        onClick={() => inputRef.current?.click()}
+        onClick={() => void chooseFolder()}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            inputRef.current?.click();
+            void chooseFolder();
           }
         }}
         onDragOver={(e) => {

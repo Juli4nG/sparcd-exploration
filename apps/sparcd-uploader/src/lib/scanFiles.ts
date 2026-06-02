@@ -71,6 +71,53 @@ export async function scanDataTransfer(items: DataTransferItemList): Promise<Sca
   return acc;
 }
 
+/**
+ * Whether this browser can hand back a durable folder handle. When true, the
+ * "Choose folder" path stores a `FileSystemDirectoryHandle` so a closed-tab
+ * resume can re-read the same bytes without asking the user to reselect.
+ */
+export const supportsDirectoryHandle = typeof window.showDirectoryPicker === 'function';
+
+/**
+ * Prompt for a folder via the File System Access API, returning the durable
+ * handle (or null if the user dismissed the picker). Read-only — this tool
+ * never writes to the local disk.
+ */
+export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
+  if (!window.showDirectoryPicker) return null;
+  try {
+    return await window.showDirectoryPicker({ mode: 'read', id: 'sparcd-uploader' });
+  } catch (err) {
+    // The user closing the picker rejects with AbortError — not an error worth
+    // surfacing; anything else is.
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
+    throw err;
+  }
+}
+
+/**
+ * Recursively scan a directory handle. relPaths are prefixed with the handle's
+ * own name so they match the `topFolder/sub/file.jpg` shape produced by the
+ * drag-drop and `webkitdirectory` paths — resume reconciliation keys on it.
+ */
+export async function scanDirectoryHandle(dir: FileSystemDirectoryHandle): Promise<ScannedFile[]> {
+  const acc: ScannedFile[] = [];
+  const walk = async (handle: FileSystemDirectoryHandle, prefix: string): Promise<void> => {
+    for await (const entry of handle.values()) {
+      const path = `${prefix}/${entry.name}`;
+      if (entry.kind === 'file') {
+        const file = await entry.getFile();
+        if (!isJpeg(file.name, file.type)) continue;
+        acc.push({ id: path, file, relPath: path, fileName: file.name, size: file.size });
+      } else {
+        await walk(entry, path);
+      }
+    }
+  };
+  await walk(dir, dir.name);
+  return acc;
+}
+
 /** Scan a <input webkitdirectory> FileList. */
 export function scanFileList(list: FileList): ScannedFile[] {
   const acc: ScannedFile[] = [];

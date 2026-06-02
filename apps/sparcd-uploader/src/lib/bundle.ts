@@ -25,16 +25,21 @@ import type { FileEntry } from '../store';
 
 /** One blob to stream: the full object key (= media_path) plus its source. */
 export type UploadItem = {
-  id: string; // FileEntry id
+  id: string; // FileEntry id (= relPath within the chosen folder)
+  localPath: string; // source path within the chosen folder; resume reconciles on it
+  fileName: string;
+  objectName: string; // resolved bundle-relative object name (the key's tail)
   key: string; // full S3 object key, identical to media_path
   file: File;
   size: number;
   sha256: string;
+  exifTimestamp?: string;
 };
 
 export type BundlePreview = {
   uploadPath: string;
   bucket: string;
+  deploymentId: string;
   fileCount: number;
   totalBytes: number;
   metadataBundleSha256: string;
@@ -110,10 +115,14 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
 
   const uploadItems: UploadItem[] = ready.map((f, i) => ({
     id: f.id,
+    localPath: f.relPath,
+    fileName: f.fileName,
+    objectName: names.get(f.id)!,
     key: media[i].mediaPath,
     file: f.file,
     size: f.size,
     sha256: f.sha256!,
+    exifTimestamp: f.exifTimestamp,
   }));
 
   const deploymentsCsv = serializeDeployments([deployment]);
@@ -157,6 +166,7 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
   return {
     uploadPath,
     bucket,
+    deploymentId: deployment.deploymentId,
     fileCount: ready.length,
     totalBytes: ready.reduce((n, f) => n + f.size, 0),
     metadataBundleSha256,

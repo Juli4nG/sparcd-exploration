@@ -1,0 +1,175 @@
+// Live view of an upload run, shared by the New-upload Upload step and the
+// History resume flow. Driven entirely by an `UploadSnapshot`, so both callers
+// render identical progress, byte counts, and the streaming PUT log.
+
+import { useEffect, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { formatBytes } from '../lib/scanFiles';
+import type { FileState, UploadSnapshot } from '../lib/upload';
+
+const STATE_DOT: Record<FileState, string> = {
+  pending: 'bg-ruleSoft',
+  uploading: 'bg-accent',
+  verifying: 'bg-accent',
+  done: 'bg-ok',
+  skipped: 'bg-warn',
+  failed: 'bg-warn',
+};
+
+const ROW = 40;
+
+export function Note({ message, tone = 'mute' }: { message: string; tone?: 'mute' | 'warn' }) {
+  return (
+    <div
+      className={`border px-3 py-2.5 font-body text-[13px] ${
+        tone === 'warn' ? 'border-warn/40 text-warn bg-paper' : 'border-ruleSoft text-inkSoft bg-paper'
+      }`}
+    >
+      {message}
+    </div>
+  );
+}
+
+function ProgressList({ snap }: { snap: UploadSnapshot }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const files = snap.files;
+  const virtualizer = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW,
+    overscan: 12,
+  });
+
+  return (
+    <div ref={parentRef} className="h-[40vh] overflow-auto border border-rule bg-panel">
+      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {virtualizer.getVirtualItems().map((vi) => {
+          const f = files[vi.index];
+          const pct = f.size > 0 ? Math.min(100, (f.loaded / f.size) * 100) : 100;
+          const tail = f.key.slice(f.key.lastIndexOf('/') + 1);
+          return (
+            <div
+              key={f.id}
+              className="absolute left-0 right-0 grid grid-cols-[14px_1fr_120px_72px] items-center gap-3 px-3 border-b border-ruleSoft"
+              style={{ height: ROW, transform: `translateY(${vi.start}px)` }}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${STATE_DOT[f.state]}`}
+                title={f.error ?? f.state}
+                aria-hidden
+              />
+              <span className="min-w-0">
+                <span className="block truncate font-mono text-[12px] text-ink" title={f.key}>
+                  {tail}
+                </span>
+                {f.error && (
+                  <span className="block truncate font-body text-[11px] text-warn" title={f.error}>
+                    {f.error}
+                  </span>
+                )}
+              </span>
+              <span className="h-1.5 bg-paperHover border border-ruleSoft overflow-hidden">
+                <span
+                  className={`block h-full ${f.state === 'failed' ? 'bg-warn' : 'bg-accent'}`}
+                  style={{ width: `${f.state === 'done' || f.state === 'skipped' ? 100 : pct}%` }}
+                />
+              </span>
+              <span className="font-mono text-[11px] text-inkSoft text-right">
+                {f.state === 'uploading' || f.state === 'verifying' ? `${Math.round(pct)}%` : f.state}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const LOG_TONE = {
+  put: 'text-inkSoft',
+  info: 'text-inkSoft',
+  warn: 'text-warn',
+  error: 'text-warn',
+} as const;
+
+function LogPanel({ snap }: { snap: UploadSnapshot }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Keep the newest line in view as the run progresses.
+  useEffect(() => {
+    const el = ref.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [snap.version]);
+
+  const tail = snap.log.slice(-400);
+  return (
+    <div
+      ref={ref}
+      className="h-[24vh] overflow-auto border border-ruleSoft bg-paper px-3 py-2 font-mono text-[11.5px] leading-[1.55]"
+    >
+      {tail.map((l, i) => (
+        <div key={i} className={`break-all ${LOG_TONE[l.kind]}`}>
+          {l.kind === 'put' ? '· ' : ''}
+          {l.text}
+        </div>
+      ))}
+      {snap.log.length === 0 && <span className="text-inkMute">No activity yet.</span>}
+    </div>
+  );
+}
+
+export function RunMonitor({ snap }: { snap: UploadSnapshot }) {
+  const counts = snap.files.reduce(
+    (a, f) => ((a[f.state] = (a[f.state] ?? 0) + 1), a),
+    {} as Record<FileState, number>,
+  );
+  const pct = snap.totalBytes > 0 ? (snap.uploadedBytes / snap.totalBytes) * 100 : 0;
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between gap-4">
+        <p className="font-body text-[13px] text-inkSoft">
+          <span className="font-mono text-ink uppercase tracking-[0.12em] text-[11px]">{snap.phase}</span>
+          {snap.dryRun && <span className="ml-2 text-warn">dry run</span>}
+          {' · '}
+          <span className="font-mono text-ok">{counts.done ?? 0}</span> done
+          {counts.skipped ? (
+            <>
+              {' · '}
+              <span className="font-mono text-warn">{counts.skipped}</span> skipped
+            </>
+          ) : null}
+          {counts.failed ? (
+            <>
+              {' · '}
+              <span className="font-mono text-warn">{counts.failed}</span> failed
+            </>
+          ) : null}
+        </p>
+        <p className="font-mono text-[12px] text-inkSoft">
+          {formatBytes(snap.uploadedBytes)} / {formatBytes(snap.totalBytes)}
+        </p>
+      </div>
+
+      <div className="h-2 bg-paperHover border border-ruleSoft overflow-hidden">
+        <span
+          className={`block h-full ${snap.phase === 'error' ? 'bg-warn' : 'bg-accent'}`}
+          style={{ width: `${snap.phase === 'done' ? 100 : pct}%` }}
+        />
+      </div>
+
+      {snap.phase === 'done' && (
+        <Note
+          message={
+            snap.dryRun
+              ? `Dry run complete — ${snap.files.length} files would publish under ${snap.uploadPath}/. Nothing was written.`
+              : `Published ${snap.files.length} files under ${snap.uploadPath}/. Bundle hash ${snap.metadataBundleSha256?.slice(0, 16)}…`
+          }
+        />
+      )}
+      {snap.phase === 'error' && <Note tone="warn" message={snap.error ?? 'Upload failed.'} />}
+
+      <ProgressList snap={snap} />
+      <LogPanel snap={snap} />
+    </section>
+  );
+}

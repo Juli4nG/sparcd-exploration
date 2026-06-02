@@ -34,6 +34,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.10.8
         version: 3.14.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      dexie:
+        specifier: ^4.0.8
+        version: 4.4.3
       exifr:
         specifier: ^7.1.3
         version: 7.1.3
@@ -806,6 +809,9 @@ packages:
     peerDependenciesMeta:
       supports-color:
         optional: true
+
+  dexie@4.4.3:
+    resolution: {integrity: sha512-N+3IGQ3HPlyO2YAkntGAwitm42BpBGV86MttzUMiRzWLa4NGh0pltVRcUVF4ybL/OnXjCrr9k7SDPIKkFYP2Lg==}
 
   didyoumean@1.2.2:
     resolution: {integrity: sha512-gxtyfqMg7GKyhQmb056K7M3xszy/myH8w+B4RT+QXBQsvAOdc3XymqDDPHx1BgPgsdAA5SIifona89YtRATDzw==}
@@ -1974,6 +1980,8 @@ snapshots:
   debug@4.4.3:
     dependencies:
       ms: 2.1.3
+
+  dexie@4.4.3: {}
 
   didyoumean@1.2.2: {}
 

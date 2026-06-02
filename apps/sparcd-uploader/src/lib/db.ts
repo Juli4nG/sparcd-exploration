@@ -1,0 +1,176 @@
+// IndexedDB-backed upload-session state for resume (P5). Dexie owns the schema;
+// the orchestrator writes a session here on every wet run and updates per-file
+// state as blobs land, so a closed tab or a flaky connection can pick the batch
+// back up instead of re-uploading from scratch.
+//
+// Dry runs never touch this store — they write nothing, so there is nothing to
+// resume. Only wet uploads persist.
+//
+// Schema versioning follows the tagger's rule: Dexie's versioning API with
+// forward-carrying upgrade callbacks, no ad-hoc store mutations. v1 is the
+// initial schema; the `blobPrefix` field the plan originally sketched is gone —
+// P3 put image bytes under the upload prefix, so there is no separate blob
+// prefix to record.
+
+import Dexie, { type Table } from 'dexie';
+
+/**
+ * How the source bytes are recovered on resume. `persistent-handle` means a
+ * durable `FileSystemDirectoryHandle` is stored and the browser can re-grant
+ * read access; `reselect-required` means the user must reselect the folder and
+ * we reconcile by relative path, size, and SHA-256.
+ */
+export type FileAccessMode = 'persistent-handle' | 'reselect-required';
+
+/** Per-file persisted state. `uploading` collapses to a restart on resume. */
+export type PersistedFileState = 'pending' | 'uploading' | 'done' | 'failed';
+
+export interface BatchRecord {
+  id: string; // sessionId — crypto.randomUUID, stable across resume
+  targetBucket: string;
+  uploadPrefix: string; // Collections/<uuid>/Uploads/<stamp>_<slug>
+  deploymentId: string;
+  uploaderUser: string; // raw identity (the slug is derived at point of use)
+  uploaderSlug: string; // sanitized slug actually used in keys
+  collectionUuid: string;
+  description: string;
+  startedAt: string; // ISO
+  completedAt?: string; // ISO once UploadComplete.json lands
+  totalFiles: number;
+  totalBytes: number;
+  fileAccessMode: FileAccessMode;
+  // Structured-cloned into IndexedDB on Chromium when permission was granted;
+  // absent when the access mode is `reselect-required`.
+  dirHandle?: FileSystemDirectoryHandle;
+}
+
+export interface FileRecord {
+  id: string; // `${sessionId}::${localPath}`
+  sessionId: string;
+  localPath: string; // path within the chosen folder (bundle-relative source)
+  fileName: string;
+  relPathInBundle: string; // sanitized relative path, pre-collision
+  sanitizedObjectName: string; // resolved object name (post-collision), key tail
+  size: number;
+  sha256: string;
+  exifTimestamp?: string;
+  exifCamera?: string;
+  state: PersistedFileState;
+  remoteKey: string; // full key = uploadPrefix/sanitizedObjectName (= media_path)
+  remoteETag?: string;
+  attempt: number;
+  lastError?: string;
+}
+
+export interface BundleRecord {
+  sessionId: string;
+  uploadMetaJson: string;
+  deploymentsCsv: string;
+  mediaCsv: string;
+  observationsCsv: string;
+  uploadCompleteJson: string;
+  metadataBundleSha256: string;
+}
+
+class UploaderDb extends Dexie {
+  batches!: Table<BatchRecord, string>;
+  files!: Table<FileRecord, string>;
+  bundles!: Table<BundleRecord, string>;
+
+  constructor() {
+    super('sparcd-uploader');
+    this.version(1).stores({
+      // Index `completedAt` so the resume scan can find open sessions cheaply.
+      batches: 'id, completedAt',
+      files: 'id, sessionId, state',
+      bundles: 'sessionId',
+    });
+  }
+}
+
+export const db = new UploaderDb();
+
+export const fileRecordId = (sessionId: string, localPath: string): string =>
+  `${sessionId}::${localPath}`;
+
+/** All sessions, newest first — drives the History list. */
+export async function listBatches(): Promise<BatchRecord[]> {
+  const rows = await db.batches.toArray();
+  return rows.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+}
+
+/** Open (not-yet-completed) sessions — candidates for resume. */
+export async function listResumable(): Promise<BatchRecord[]> {
+  return (await listBatches()).filter((b) => !b.completedAt);
+}
+
+/** Per-state file tallies for a session — drives the History progress line. */
+export async function fileStateCounts(
+  sessionId: string,
+): Promise<Record<PersistedFileState, number>> {
+  const rows = await db.files.where('sessionId').equals(sessionId).toArray();
+  const counts: Record<PersistedFileState, number> = {
+    pending: 0,
+    uploading: 0,
+    done: 0,
+    failed: 0,
+  };
+  for (const r of rows) counts[r.state]++;
+  return counts;
+}
+
+export type LoadedSession = {
+  batch: BatchRecord;
+  bundle: BundleRecord;
+  files: FileRecord[];
+};
+
+export async function loadSession(sessionId: string): Promise<LoadedSession | null> {
+  const [batch, bundle, files] = await Promise.all([
+    db.batches.get(sessionId),
+    db.bundles.get(sessionId),
+    db.files.where('sessionId').equals(sessionId).toArray(),
+  ]);
+  if (!batch || !bundle) return null;
+  return { batch, bundle, files };
+}
+
+/**
+ * Persist (or re-persist) a whole session. The file rows are replaced wholesale
+ * so a re-stamp — which rebuilds the bundle under a fresh prefix and re-keys
+ * every file — leaves no stale rows behind for the same `sessionId`.
+ */
+export async function saveSession(
+  batch: BatchRecord,
+  bundle: BundleRecord,
+  files: FileRecord[],
+): Promise<void> {
+  await db.transaction('rw', db.batches, db.bundles, db.files, async () => {
+    await db.batches.put(batch);
+    await db.bundles.put(bundle);
+    await db.files.where('sessionId').equals(batch.id).delete();
+    await db.files.bulkPut(files);
+  });
+}
+
+export async function markFileState(id: string, patch: Partial<FileRecord>): Promise<void> {
+  await db.files.update(id, patch);
+}
+
+export async function markBatchComplete(sessionId: string, completedAt: string): Promise<void> {
+  await db.batches.update(sessionId, { completedAt });
+}
+
+/** Update the prefix-derived fields after a re-stamp (kept distinct from save). */
+export async function updateBatch(sessionId: string, patch: Partial<BatchRecord>): Promise<void> {
+  await db.batches.update(sessionId, patch);
+}
+
+/** Drop a session row plus its files and bundle. Never touches remote state. */
+export async function discardSession(sessionId: string): Promise<void> {
+  await db.transaction('rw', db.batches, db.files, db.bundles, async () => {
+    await db.files.where('sessionId').equals(sessionId).delete();
+    await db.bundles.delete(sessionId);
+    await db.batches.delete(sessionId);
+  });
+}

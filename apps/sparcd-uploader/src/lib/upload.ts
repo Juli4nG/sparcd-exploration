@@ -1,4 +1,4 @@
-// P4 upload orchestration. Runs the full publish sequence for one bundle:
+// Upload orchestration. Runs the full publish sequence for one bundle:
 //
 //   1. Stream every image blob under the upload prefix (bounded concurrency,
 //      exponential backoff + jitter on transient failures, HEAD verify).
@@ -12,13 +12,23 @@
 // the blobs and CSVs are already in place.
 //
 // Dry-run (default on for the first session) walks the same sequence but issues
-// no PUTs — it logs every write the run would make (bucket, key, size, hash).
+// no PUTs — it logs every write the run would make (bucket, key, size, hash) —
+// and persists nothing, since there is nothing to resume.
 //
-// Re-stamp retry: a 412 on any final-prefix metadata object means another
-// uploader took this `<stamp>_<user>` prefix. We abandon it, bump the stamp by
-// one second, rebuild the bundle (new prefix → new keys), and retry the whole
-// run once; a second collision surfaces. Abandoned blobs are orphans — this
-// tool never deletes (open question 5 lean: auto-retry once, then surface).
+// Re-stamp retry (fresh runs only): a 412 on any final-prefix metadata object
+// means another uploader took this `<stamp>_<user>` prefix. We abandon it, bump
+// the stamp by one second, rebuild the bundle (new prefix → new keys), and
+// retry the whole run once; a second collision surfaces. Abandoned blobs are
+// orphans — this tool never deletes (open question 5 lean: auto-retry once,
+// then surface).
+//
+// Resume (P5): a wet run persists its session to IndexedDB (Dexie) and updates
+// per-file state as blobs land. `resumeUpload` replays a persisted session
+// against reattached source files — completed blobs are skipped after a
+// statObject size/hash sanity check, and interrupted files restart from
+// scratch (mid-file multipart resume is a follow-on, not v0). The prefix is
+// reused, so a 412 on a metadata write is treated as "already written, skip"
+// rather than a re-stamp.
 //
 // Bounded concurrency is a small inline lane pool rather than p-limit: lanes
 // lazily pull the next blob, so memory stays flat across thousands of files and
@@ -27,7 +37,18 @@
 import type { S3Config } from '@sparcd/types';
 import { PreconditionFailedError } from '@sparcd/s3-safe';
 import { getClient } from './s3';
-import { buildBundle, type BuildInput, type BundlePreview } from './bundle';
+import { buildBundle, type BuildInput, type BundlePreview, type UploadItem } from './bundle';
+import {
+  fileRecordId,
+  saveSession,
+  markFileState,
+  markBatchComplete,
+  type BatchRecord,
+  type BundleRecord,
+  type FileAccessMode,
+  type FileRecord,
+  type LoadedSession,
+} from './db';
 
 export type UploadPhase = 'idle' | 'blobs' | 'metadata' | 'done' | 'error';
 export type FileState = 'pending' | 'uploading' | 'verifying' | 'done' | 'skipped' | 'failed';
@@ -63,6 +84,17 @@ export type UploadParams = {
   build: Omit<BuildInput, 'now'>;
   dryRun: boolean;
   concurrency: number; // parallel blob lanes
+  // Resume metadata persisted in the batch row; absent for dry runs.
+  uploaderUser?: string; // raw identity (the slug lives in build.uploaderSlug)
+  fileAccessMode?: FileAccessMode;
+  dirHandle?: FileSystemDirectoryHandle | null;
+};
+
+export type ResumeParams = {
+  config: S3Config;
+  session: LoadedSession;
+  attached: Map<string, File>; // localPath → reattached source file
+  concurrency: number;
 };
 
 export type UploadRun = { cancel: () => void; done: Promise<void> };
@@ -87,11 +119,101 @@ function isTransient(err: unknown): boolean {
 // Full jitter: random in [0, base * 2^attempt].
 const backoff = (attempt: number) => Math.random() * (BASE_BACKOFF_MS * 2 ** attempt);
 
-export function runUpload(
-  params: UploadParams,
+// A statObject 404 (the object isn't there) is a recognizable shape; anything
+// without a 2xx/expected stat means "re-upload".
+function isNotFound(err: unknown): boolean {
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return e.$metadata?.httpStatusCode === 404 || e.name === 'NotFound' || e.name === 'NoSuchKey';
+}
+
+/** A single blob to (maybe) upload, with whether the persisted state says done. */
+type PlanItem = {
+  id: string;
+  localPath: string;
+  fileName: string;
+  objectName: string;
+  key: string;
+  size: number;
+  sha256: string;
+  exifTimestamp?: string;
+  file: File | null;
+  doneAlready: boolean;
+};
+
+type RunPlan = {
+  sessionId: string;
+  bucket: string;
+  uploadPath: string;
+  totalBytes: number;
+  metadataBundleSha256: string;
+  items: PlanItem[];
+  writes: { name: string; body: string; contentType: string }[];
+};
+
+const metadataWrites = (b: {
+  deploymentsCsv: string;
+  mediaCsv: string;
+  observationsCsv: string;
+  uploadMetaJson: string;
+  uploadCompleteJson: string;
+}): RunPlan['writes'] => [
+  { name: 'deployments.csv', body: b.deploymentsCsv, contentType: 'text/csv' },
+  { name: 'media.csv', body: b.mediaCsv, contentType: 'text/csv' },
+  { name: 'observations.csv', body: b.observationsCsv, contentType: 'text/csv' },
+  { name: 'UploadMeta.json', body: b.uploadMetaJson, contentType: 'application/json' },
+  { name: 'UploadComplete.json', body: b.uploadCompleteJson, contentType: 'application/json' },
+];
+
+const planFromBundle = (sessionId: string, bundle: BundlePreview): RunPlan => ({
+  sessionId,
+  bucket: bundle.bucket,
+  uploadPath: bundle.uploadPath,
+  totalBytes: bundle.totalBytes,
+  metadataBundleSha256: bundle.metadataBundleSha256,
+  items: bundle.items.map((it: UploadItem) => ({
+    id: it.id,
+    localPath: it.localPath,
+    fileName: it.fileName,
+    objectName: it.objectName,
+    key: it.key,
+    size: it.size,
+    sha256: it.sha256,
+    exifTimestamp: it.exifTimestamp,
+    file: it.file,
+    doneAlready: false,
+  })),
+  writes: metadataWrites(bundle),
+});
+
+const fileRecordFor = (sessionId: string, it: PlanItem, state: FileRecord['state']): FileRecord => ({
+  id: fileRecordId(sessionId, it.localPath),
+  sessionId,
+  localPath: it.localPath,
+  fileName: it.fileName,
+  relPathInBundle: it.objectName,
+  sanitizedObjectName: it.objectName,
+  size: it.size,
+  sha256: it.sha256,
+  exifTimestamp: it.exifTimestamp,
+  state,
+  remoteKey: it.key,
+  attempt: 0,
+});
+
+/**
+ * The shared executor over a RunPlan. Used by both a fresh run and a resume; the
+ * differences are: `persist` (write Dexie state as blobs land), `isResume`
+ * (treat a metadata 412 as already-written rather than a collision to re-stamp),
+ * and `dryRun` (log only).
+ */
+function makeRunner(
+  config: S3Config,
+  concurrency: number,
   onUpdate: (snap: UploadSnapshot) => void,
-): UploadRun {
-  const { config, build, dryRun, concurrency } = params;
+  opts: { persist: boolean; isResume: boolean; dryRun: boolean },
+) {
+  const { persist, isResume, dryRun } = opts;
+  const client = getClient(config);
   let cancelled = false;
   let abort = new AbortController();
 
@@ -103,7 +225,7 @@ export function runUpload(
     uploadedBytes: 0,
     totalBytes: 0,
     log: [],
-    bucket: build.bucket,
+    bucket: '',
   };
 
   let lastEmit = 0;
@@ -119,9 +241,41 @@ export function runUpload(
     emit(true);
   };
 
-  const client = getClient(config);
+  const persistFile = (sessionId: string, localPath: string, patch: Partial<FileRecord>) => {
+    if (persist) void markFileState(fileRecordId(sessionId, localPath), patch);
+  };
 
-  const uploadBlob = async (fp: FileProgress, file: File, sha256: string): Promise<void> => {
+  // Upload (or skip) one blob. Returns once the object is present and verified,
+  // or throws on a non-recoverable failure.
+  const processItem = async (sessionId: string, fp: FileProgress, it: PlanItem): Promise<void> => {
+    // A completed blob from a prior run: sanity-check the remote copy before
+    // skipping it. Size + recorded SHA-256 metadata is the portable contract.
+    if (it.doneAlready) {
+      try {
+        const stat = await client.statObject(snap.bucket, it.key);
+        if (stat.size === it.size && stat.metadata.sha256 === it.sha256) {
+          fp.state = 'skipped';
+          snap.uploadedBytes += it.size - fp.loaded;
+          fp.loaded = it.size;
+          log('info', `verified, skip: ${it.key}`);
+          emit(true);
+          return;
+        }
+        log('warn', `remote mismatch, re-uploading: ${it.key}`);
+      } catch (err) {
+        if (isNotFound(err)) log('warn', `remote missing, re-uploading: ${it.key}`);
+        else throw err;
+      }
+    }
+
+    if (!it.file) {
+      fp.state = 'failed';
+      fp.error = 'source file unavailable — reselect the folder';
+      persistFile(sessionId, it.localPath, { state: 'failed', lastError: fp.error });
+      log('error', `${it.key}: ${fp.error}`);
+      throw new Error(fp.error);
+    }
+
     for (let attempt = 0; ; attempt++) {
       if (cancelled) throw new Error('cancelled');
       fp.attempt = attempt + 1;
@@ -130,8 +284,8 @@ export function runUpload(
       fp.loaded = 0;
       emit(true);
       try {
-        await client.writeImmutableStream(snap.bucket, fp.key, file, {
-          sha256,
+        const { etag } = await client.writeImmutableStream(snap.bucket, it.key, it.file, {
+          sha256: it.sha256,
           contentType: 'image/jpeg',
           signal: abort.signal,
           onProgress: (loaded) => {
@@ -143,20 +297,26 @@ export function runUpload(
         // Portable verification: HEAD and confirm size + recorded digest.
         fp.state = 'verifying';
         emit(true);
-        const stat = await client.statObject(snap.bucket, fp.key);
+        const stat = await client.statObject(snap.bucket, it.key);
         if (stat.size !== fp.size) throw new Error(`size mismatch (${stat.size} ≠ ${fp.size})`);
-        if (stat.metadata.sha256 !== sha256) throw new Error('sha256 metadata mismatch');
+        if (stat.metadata.sha256 !== it.sha256) throw new Error('sha256 metadata mismatch');
         fp.state = 'done';
+        persistFile(sessionId, it.localPath, {
+          state: 'done',
+          remoteETag: etag,
+          attempt: fp.attempt,
+        });
         emit(true);
         return;
       } catch (err) {
         if (err instanceof PreconditionFailedError) {
-          // The key is already occupied (e.g. a re-run of the same prefix);
-          // nothing to write. Treat as present rather than failing the run.
+          // The key is already occupied (a re-run of the same prefix): nothing
+          // to write. Treat as present — the forward hook for resume.
           fp.state = 'skipped';
           snap.uploadedBytes += fp.size - fp.loaded;
           fp.loaded = fp.size;
-          log('warn', `skip (exists): ${fp.key}`);
+          persistFile(sessionId, it.localPath, { state: 'done' });
+          log('warn', `skip (exists): ${it.key}`);
           return;
         }
         // A user cancel or a sibling lane's fatal failure aborts the signal;
@@ -166,25 +326,28 @@ export function runUpload(
         if (attempt + 1 >= MAX_ATTEMPTS || !isTransient(err)) {
           fp.state = 'failed';
           fp.error = msg;
-          log('error', `failed ${fp.key}: ${msg}`);
+          persistFile(sessionId, it.localPath, { state: 'failed', lastError: msg, attempt: fp.attempt });
+          log('error', `failed ${it.key}: ${msg}`);
           throw err;
         }
         const wait = backoff(attempt);
-        log('warn', `retry ${fp.key} (attempt ${attempt + 2}) after ${Math.round(wait)}ms: ${msg}`);
+        log('warn', `retry ${it.key} (attempt ${attempt + 2}) after ${Math.round(wait)}ms: ${msg}`);
         await sleep(wait);
       }
     }
   };
 
-  // One attempt at the whole sequence against a freshly-built bundle. Throws
-  // PreconditionFailedError if a final-prefix metadata write collides, so the
-  // caller can re-stamp and retry.
-  const runOnce = async (bundle: BundlePreview): Promise<void> => {
-    snap.uploadPath = bundle.uploadPath;
-    snap.metadataBundleSha256 = bundle.metadataBundleSha256;
-    snap.totalBytes = bundle.totalBytes;
+  // One attempt at the whole sequence for a given plan. Throws
+  // PreconditionFailedError on a final-prefix metadata collision (fresh runs
+  // re-stamp; resumes skip).
+  const runOnce = async (plan: RunPlan): Promise<void> => {
+    abort = new AbortController(); // fresh signal per attempt
+    snap.bucket = plan.bucket;
+    snap.uploadPath = plan.uploadPath;
+    snap.metadataBundleSha256 = plan.metadataBundleSha256;
+    snap.totalBytes = plan.totalBytes;
     snap.uploadedBytes = 0;
-    snap.files = bundle.items.map((it) => ({
+    snap.files = plan.items.map((it) => ({
       id: it.id,
       key: it.key,
       size: it.size,
@@ -196,10 +359,15 @@ export function runUpload(
 
     // --- Phase 1: blobs ---
     snap.phase = 'blobs';
-    log('info', `${bundle.items.length} blobs → ${bundle.uploadPath}/`);
+    const remaining = plan.items.filter((it) => !it.doneAlready).length;
+    log(
+      'info',
+      `${plan.items.length} blobs → ${plan.uploadPath}/` +
+        (remaining !== plan.items.length ? ` (${plan.items.length - remaining} already done)` : ''),
+    );
 
     if (dryRun) {
-      for (const it of bundle.items) {
+      for (const it of plan.items) {
         const fp = byId.get(it.id)!;
         fp.state = 'done';
         fp.loaded = it.size;
@@ -214,10 +382,10 @@ export function runUpload(
         for (;;) {
           if (cancelled || fatal) return;
           const i = next++;
-          if (i >= bundle.items.length) return;
-          const it = bundle.items[i];
+          if (i >= plan.items.length) return;
+          const it = plan.items[i];
           try {
-            await uploadBlob(byId.get(it.id)!, it.file, it.sha256);
+            await processItem(plan.sessionId, byId.get(it.id)!, it);
           } catch (err) {
             if (!fatal) {
               fatal = err;
@@ -227,7 +395,7 @@ export function runUpload(
           }
         }
       };
-      const lanes = Math.max(1, Math.min(concurrency, bundle.items.length));
+      const lanes = Math.max(1, Math.min(concurrency, plan.items.length));
       await Promise.all(Array.from({ length: lanes }, lane));
       if (fatal) throw fatal;
     }
@@ -238,29 +406,27 @@ export function runUpload(
     snap.phase = 'metadata';
     emit(true);
 
-    const writes: { name: string; body: string; contentType: string }[] = [
-      { name: 'deployments.csv', body: bundle.deploymentsCsv, contentType: 'text/csv' },
-      { name: 'media.csv', body: bundle.mediaCsv, contentType: 'text/csv' },
-      { name: 'observations.csv', body: bundle.observationsCsv, contentType: 'text/csv' },
-      { name: 'UploadMeta.json', body: bundle.uploadMetaJson, contentType: 'application/json' },
-      { name: 'UploadComplete.json', body: bundle.uploadCompleteJson, contentType: 'application/json' },
-    ];
-
-    for (const w of writes) {
-      const key = `${bundle.uploadPath}/${w.name}`;
+    for (const w of plan.writes) {
+      const key = `${plan.uploadPath}/${w.name}`;
       if (dryRun) {
         log('put', `PUT ${snap.bucket}/${key} (${new TextEncoder().encode(w.body).length} B)`);
         continue;
       }
-      // A 412 here means the prefix was taken between blob upload and now —
-      // propagate so the caller re-stamps. Other failures get a short retry.
       for (let attempt = 0; ; attempt++) {
         try {
           await client.writeImmutable(snap.bucket, key, w.body, { contentType: w.contentType });
           log('info', `wrote ${key}`);
           break;
         } catch (err) {
-          if (err instanceof PreconditionFailedError) throw err;
+          if (err instanceof PreconditionFailedError) {
+            // Resume owns the prefix, so a 412 means we already wrote this file
+            // in a prior run — idempotent, skip. A fresh run re-stamps instead.
+            if (isResume) {
+              log('info', `already present, skip: ${key}`);
+              break;
+            }
+            throw err;
+          }
           if (attempt + 1 >= MAX_ATTEMPTS || !isTransient(err)) throw err;
           await sleep(backoff(attempt));
         }
@@ -268,41 +434,160 @@ export function runUpload(
     }
   };
 
+  return {
+    snap,
+    log,
+    emit,
+    runOnce,
+    cancel: () => {
+      cancelled = true;
+      abort.abort();
+    },
+    isCancelled: () => cancelled,
+  };
+}
+
+/** Fresh upload (dry or wet). Wet runs persist a resumable session to Dexie. */
+export function runUpload(
+  params: UploadParams,
+  onUpdate: (snap: UploadSnapshot) => void,
+): UploadRun {
+  const { config, build, dryRun, concurrency } = params;
+  const persist = !dryRun;
+  const runner = makeRunner(config, concurrency, onUpdate, { persist, isResume: false, dryRun });
+
   const done = (async () => {
+    const sessionId = crypto.randomUUID();
     let now = new Date();
     for (let stamp = 0; ; stamp++) {
-      abort = new AbortController(); // fresh signal per attempt
       const bundle = await buildBundle({ ...build, now });
+      const plan = planFromBundle(sessionId, bundle);
+
+      // Persist (or re-persist after a re-stamp) the session before writing a
+      // byte, so a crash mid-blobs leaves a resumable row.
+      if (persist) {
+        const startedAt = new Date().toISOString();
+        const batch: BatchRecord = {
+          id: sessionId,
+          targetBucket: bundle.bucket,
+          uploadPrefix: bundle.uploadPath,
+          deploymentId: bundle.deploymentId,
+          uploaderUser: params.uploaderUser ?? build.uploaderSlug,
+          uploaderSlug: build.uploaderSlug,
+          collectionUuid: build.collectionUuid,
+          description: build.description,
+          startedAt,
+          totalFiles: plan.items.length,
+          totalBytes: plan.totalBytes,
+          fileAccessMode: params.fileAccessMode ?? 'reselect-required',
+          dirHandle: params.dirHandle ?? undefined,
+        };
+        const bundleRec: BundleRecord = {
+          sessionId,
+          uploadMetaJson: bundle.uploadMetaJson,
+          deploymentsCsv: bundle.deploymentsCsv,
+          mediaCsv: bundle.mediaCsv,
+          observationsCsv: bundle.observationsCsv,
+          uploadCompleteJson: bundle.uploadCompleteJson,
+          metadataBundleSha256: bundle.metadataBundleSha256,
+        };
+        await saveSession(
+          batch,
+          bundleRec,
+          plan.items.map((it) => fileRecordFor(sessionId, it, 'pending')),
+        );
+      }
+
       try {
-        await runOnce(bundle);
-        snap.phase = 'done';
-        log('info', dryRun ? 'dry-run complete — nothing written' : `published ${bundle.uploadPath}/`);
+        await runner.runOnce(plan);
+        runner.snap.phase = 'done';
+        if (persist) await markBatchComplete(sessionId, new Date().toISOString());
+        runner.log('info', dryRun ? 'dry-run complete — nothing written' : `published ${bundle.uploadPath}/`);
+        runner.emit(true);
         return;
       } catch (err) {
-        if (cancelled) {
-          snap.phase = 'error';
-          snap.error = 'cancelled';
-          log('warn', 'cancelled');
+        if (runner.isCancelled()) {
+          runner.snap.phase = 'error';
+          runner.snap.error = 'cancelled';
+          runner.log('warn', 'cancelled');
           return;
         }
         if (err instanceof PreconditionFailedError && stamp < METADATA_RETRY) {
-          log('warn', `prefix ${bundle.uploadPath} taken — re-stamping +1s and retrying`);
+          runner.log('warn', `prefix ${bundle.uploadPath} taken — re-stamping +1s and retrying`);
           now = new Date(now.getTime() + 1000);
           continue;
         }
-        snap.phase = 'error';
-        snap.error = err instanceof Error ? err.message : String(err);
-        log('error', snap.error);
+        runner.snap.phase = 'error';
+        runner.snap.error = err instanceof Error ? err.message : String(err);
+        runner.log('error', runner.snap.error);
+        runner.emit(true);
         return;
       }
     }
   })();
 
-  return {
-    cancel: () => {
-      cancelled = true;
-      abort.abort();
-    },
-    done,
+  return { cancel: runner.cancel, done };
+}
+
+/**
+ * Resume a persisted session against reattached source files. The prefix and
+ * keys are reused verbatim, so completed blobs skip (after a sanity check) and
+ * only the interrupted/pending files re-upload. Always a wet run.
+ */
+export function resumeUpload(
+  params: ResumeParams,
+  onUpdate: (snap: UploadSnapshot) => void,
+): UploadRun {
+  const { config, session, attached, concurrency } = params;
+  const { batch, bundle, files } = session;
+  const runner = makeRunner(config, concurrency, onUpdate, {
+    persist: true,
+    isResume: true,
+    dryRun: false,
+  });
+
+  const plan: RunPlan = {
+    sessionId: batch.id,
+    bucket: batch.targetBucket,
+    uploadPath: batch.uploadPrefix,
+    totalBytes: files.reduce((n, f) => n + f.size, 0),
+    metadataBundleSha256: bundle.metadataBundleSha256,
+    items: files.map((r) => ({
+      id: r.localPath,
+      localPath: r.localPath,
+      fileName: r.fileName,
+      objectName: r.sanitizedObjectName,
+      key: r.remoteKey,
+      size: r.size,
+      sha256: r.sha256,
+      exifTimestamp: r.exifTimestamp,
+      file: attached.get(r.localPath) ?? null,
+      doneAlready: r.state === 'done',
+    })),
+    writes: metadataWrites(bundle),
   };
+
+  const done = (async () => {
+    try {
+      runner.log('info', `resuming ${batch.uploadPrefix}/`);
+      await runner.runOnce(plan);
+      runner.snap.phase = 'done';
+      await markBatchComplete(batch.id, new Date().toISOString());
+      runner.log('info', `published ${batch.uploadPrefix}/`);
+      runner.emit(true);
+    } catch (err) {
+      if (runner.isCancelled()) {
+        runner.snap.phase = 'error';
+        runner.snap.error = 'cancelled';
+        runner.log('warn', 'cancelled');
+        return;
+      }
+      runner.snap.phase = 'error';
+      runner.snap.error = err instanceof Error ? err.message : String(err);
+      runner.log('error', runner.snap.error);
+      runner.emit(true);
+    }
+  })();
+
+  return { cancel: runner.cancel, done };
 }

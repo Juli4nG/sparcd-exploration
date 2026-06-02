@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { S3Config } from '@sparcd/types';
 import type { ScannedFile } from './lib/scanFiles';
 import type { ProcessResponse } from './lib/processPool';
+import type { FileAccessMode } from './lib/db';
 import { validateBatch, type FileValidation } from './lib/validation';
 
 export type Section = 'new' | 'history' | 'settings';
@@ -32,6 +33,10 @@ type UploaderState = {
   scanning: boolean;
   processing: boolean;
   batchToken: number; // bumps each new batch; identifies a processing run
+  // A durable folder handle when the browser granted one (Chromium); drives the
+  // resume access mode so a closed tab can re-read the same bytes.
+  dirHandle: FileSystemDirectoryHandle | null;
+  fileAccessMode: FileAccessMode;
   uploaderUser: string; // free-text identity, normalized into a slug for keys
   selectedLocationKey: string | null; // chosen deployment location key (Assign)
   selectedBucket: string | null; // target collection bucket (Assign)
@@ -46,7 +51,7 @@ type UploaderState = {
   setStep: (step: WizardStep) => void;
   setScanning: (scanning: boolean) => void;
   setProcessing: (processing: boolean) => void;
-  setFiles: (files: ScannedFile[]) => void;
+  setFiles: (files: ScannedFile[], dirHandle?: FileSystemDirectoryHandle | null) => void;
   markProcessing: (id: string) => void;
   applyResult: (result: ProcessResponse) => void;
   removeFile: (id: string) => void;
@@ -72,6 +77,8 @@ export const useStore = create<UploaderState>((set) => ({
   scanning: false,
   processing: false,
   batchToken: 0,
+  dirHandle: null,
+  fileAccessMode: 'reselect-required',
   uploaderUser: '',
   selectedLocationKey: null,
   selectedBucket: null,
@@ -81,7 +88,15 @@ export const useStore = create<UploaderState>((set) => ({
 
   connect: (config) => set({ s3Config: config }),
   disconnect: () =>
-    set({ s3Config: null, section: 'new', step: 'drop', files: [], validations: {} }),
+    set({
+      s3Config: null,
+      section: 'new',
+      step: 'drop',
+      files: [],
+      validations: {},
+      dirHandle: null,
+      fileAccessMode: 'reselect-required',
+    }),
   setSection: (section) => set({ section }),
   toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
   setStep: (step) => set({ step }),
@@ -90,7 +105,7 @@ export const useStore = create<UploaderState>((set) => ({
 
   // De-dupe by relPath; a re-scan replaces the batch wholesale and bumps the
   // token so the processing controller starts a fresh run.
-  setFiles: (scanned) => {
+  setFiles: (scanned, dirHandle = null) => {
     const seen = new Set<string>();
     const entries = scanned
       .filter((f) => (seen.has(f.id) ? false : (seen.add(f.id), true)))
@@ -100,6 +115,8 @@ export const useStore = create<UploaderState>((set) => ({
       validations: validateBatch(entries),
       step: entries.length > 0 ? 'inspect' : 'drop',
       batchToken: s.batchToken + 1,
+      dirHandle,
+      fileAccessMode: dirHandle ? 'persistent-handle' : 'reselect-required',
     }));
   },
 
@@ -135,7 +152,14 @@ export const useStore = create<UploaderState>((set) => ({
     }),
 
   resetBatch: () =>
-    set((s) => ({ files: [], validations: {}, step: 'drop', batchToken: s.batchToken + 1 })),
+    set((s) => ({
+      files: [],
+      validations: {},
+      step: 'drop',
+      batchToken: s.batchToken + 1,
+      dirHandle: null,
+      fileAccessMode: 'reselect-required',
+    })),
 
   // Stored raw; sanitizeUploaderUser derives the key-safe slug at point of use.
   setUploaderUser: (value) => set({ uploaderUser: value }),
@@ -154,5 +178,7 @@ export const useStore = create<UploaderState>((set) => ({
       validations: {},
       step: 'drop',
       batchToken: s.batchToken + 1,
+      dirHandle: null,
+      fileAccessMode: 'reselect-required',
     })),
 }));
