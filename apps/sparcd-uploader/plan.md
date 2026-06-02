@@ -49,15 +49,15 @@ Same shape as the tagger; additions reflect the upload-specific work.
 - **TanStack Virtual** — virtualized file list for big batches
 - **Zustand** — upload-session state
 - **Dexie.js** — IndexedDB for resumable upload state
-- **`@aws-sdk/client-s3`** — same client as the tagger; portable across
-  MinIO / AWS S3 / Cloudflare R2
+- **`@aws-sdk/client-s3`** + **`@aws-sdk/lib-storage`** — `lib-storage`'s
+  `Upload` class wraps the client and handles single-PUT vs multipart
+  automatically per file; portable across MinIO / AWS S3 / Cloudflare R2.
 - **`exifr`** — EXIF parsing (timestamps, camera model, optional GPS)
-- **Web Workers** — file hashing and EXIF parsing off the main thread, to
-  keep the UI responsive on multi-thousand-image batches
-- **`p-limit`** — bounded concurrency for parallel PUTs
-
-No multipart upload in v0; v0 rejects files above the single-PUT ceiling
-(see Out of scope). Multipart lands in P6 if real batches need it.
+- **Web Workers + Streams API** — EXIF parsing, SHA-256 hashing, and the
+  upload itself all happen off the main thread. Files stream through
+  workers chunk-by-chunk rather than loading into memory, so a 5,000-file
+  batch never spikes RAM (industry standard for browser bulk upload).
+- **`p-limit`** — bounded concurrency for parallel uploads.
 
 ## Shared packages
 
@@ -83,15 +83,35 @@ that point — not now.
 
 ### Wrapper changes needed in `@sparcd/s3-safe`
 
-The current method set covers single-PUT uploads:
+Add one method that the uploader uses for every file:
 
-- `listObjects`, `getObject`, `statObject`, `presignedGet`
-- `writeImmutable(bucket, key, body)` — atomic conditional `PutObject`
+- `writeImmutableStream(bucket, key, stream, {sha256, onProgress})` —
+  wraps `@aws-sdk/lib-storage`'s `Upload` class. Configured with
+  `leavePartsOnError: true` (see Multipart hygiene). Single-PUT under the
+  multipart threshold (default 5 MB), multipart above it. The goal is the
+  same `IfNoneMatch: "*"` precondition on both paths — applied at the
+  single PUT, or at the `CompleteMultipartUpload` step for the multipart
+  path — with no destructive fallback if the backend doesn't enforce it
+  (throws `ConditionalPutUnsupported`).
 
-The uploader's needs are **already covered** by the existing surface;
-nothing new is required for v0. A future multipart-capable variant in P6
-would add `writeImmutableLarge(bucket, key, blob, {onProgress})` with the
-same `IfNoneMatch: "*"` guarantee at the `CompleteMultipartUpload` step.
+  **Two things to prove before this method is allowed to claim the
+  guarantee:**
+  1. **`lib-storage` can attach `IfNoneMatch` to `CompleteMultipartUpload`.**
+     The library may or may not expose a hook for that completion-step
+     header at the `Upload` level. If it doesn't, options are: (a) drop
+     down to manual `CreateMultipartUpload` / `UploadPart` /
+     `CompleteMultipartUpload` orchestration inside `writeImmutableStream`
+     to retain the conditional complete; or (b) defer multipart out of
+     v0, ceiling files at the single-PUT size with a clear error. This is
+     a P4 spike, not an implementation assumption.
+  2. **Backend enforcement.** AWS supports conditional `PutObject`
+     (Aug 2024) and conditional `CompleteMultipartUpload` separately;
+     MinIO and R2 behavior with `lib-storage` + checksum headers needs
+     proof. The wrapper's safety contract is "verified on the backends
+     listed in `packages/s3-safe/README.md`," not a blanket promise.
+
+The existing read methods + `writeImmutable` (small atomic objects like
+`UploadComplete.json`) are unchanged.
 
 ## Architecture
 
@@ -103,7 +123,7 @@ Local folder ─drop─►  File list                                           
                           ▼                                                  │
                   Web Worker pool                                            │
                    ├─ EXIF parse  (timestamps, model, GPS)                  │
-                   └─ SHA-256 hash (dedup + integrity)                      │
+                   └─ SHA-256 hash pass (streamed; digest cached per file)  │
                           │                                                  │
                           ▼                                                  │
 Settings/locations.json ─►  Deployment picker  ─►  Bundle builder            │
@@ -115,7 +135,7 @@ Settings/locations.json ─►  Deployment picker  ─►  Bundle builder       
                                             Upload queue (p-limit, Dexie)   │
                                                        │                     │
                                                        ▼                     ▼
-                       writeImmutable() → blobPrefix images, then uploadPrefix CSVs + manifest
+    writeImmutableStream() → blobPrefix images, then writeImmutable() → uploadPrefix CSVs + manifest
 ```
 
 ### Layout
@@ -201,9 +221,60 @@ Dexie tracks every upload-session state needed for resume.
   existing image display code can presign the media path directly even
   though the bytes are outside the upload prefix. This avoids exposing a
   half-populated upload directory while large files are still transferring.
+- **Upload mechanics (informed by industry patterns).** Big-company web
+  uploaders (Google Drive, Dropbox, Uppy + Tus) converge on a small set of
+  techniques; the S3-native equivalent (which we use since we have no Tus
+  server) is:
+  - **`@aws-sdk/lib-storage`'s `Upload`** per file. Small files PUT in one
+    request; large files multipart automatically. Resume scope for v0:
+    **completed file blobs are skipped, interrupted files restart from
+    scratch.** `lib-storage`'s `Upload` manages multipart *within* a
+    session, not across browser restarts; "mid-file multipart resume" is
+    a separate feature that requires persisting `UploadId`, part size,
+    completed-part ETags / checksums in Dexie, then recovering state via
+    `ListMultipartUploads` + `ListParts`. Worth building if real
+    researcher uploads routinely cross sessions on huge files — keep the
+    hooks in Dexie but treat true mid-file resume as P5+/follow-on, not
+    a v0 guarantee.
+  - **Two-pass per file, both streamed in a Web Worker.**
+    1. **Hash pass.** Stream the file chunk-by-chunk through SHA-256 to
+       produce the digest.
+    2. **Upload pass.** Stream the file chunk-by-chunk into `Upload`,
+       attaching the precomputed SHA-256 as object metadata and (where
+       supported) as the `x-amz-checksum-sha256` header.
+
+    Two reads cost local disk I/O, but never RAM — memory stays flat
+    regardless of batch size (thousands of files are fine). Pre-hashing
+    is required by S3 semantics: object metadata and checksum headers
+    must be known *before* the PUT or `CreateMultipartUpload` starts.
+  - **Bounded concurrency, default 8.** Uppy/Tus default 20 but report 5–10
+    as the practical sweet spot; AWS SDK examples lean 4–8. 8 is the
+    "fast on modern endpoints, well-behaved on hotel Wi-Fi" balance.
+    Adaptive based on observed throughput is a P5+ enhancement.
+  - **Exponential backoff with jitter** on transient failures (network
+    blips, 5xx). Same pattern as Uppy/Tus.
+- **Why not OPFS staging by default?** OPFS (the browser's private
+  filesystem) is great for *durable resume that survives losing the source
+  folder*, but it doubles disk usage (every file is copied into the browser
+  sandbox before upload) and adds a long "ingest" wait on drop. For the
+  common camera-trap workflow — researcher uploads from an SD card or
+  folder they keep around for the session — the `FileSystemDirectoryHandle`
+  + reselect-folder model is lighter and faster. OPFS stays a future option
+  if researcher workflows show frequent source-disappearance, but it's
+  **explicitly not in v0** because it adds complexity without enough
+  payoff to justify the volunteer-facing friction. Keep things simple.
+- **Why not Tus / a resumable-session protocol?** Tus is excellent and is
+  what Uppy uses, but it needs a Tus server in front. We deploy against
+  raw S3-compatible storage with no extra service, so we use the S3-native
+  equivalent (multipart with `lib-storage`) instead.
 - **Order of operations.**
-  1. Stream image PUTs to `blobPrefix` in parallel under `p-limit` (default 4, slider
-     2–16). Each is `writeImmutable`, so a retry never overwrites.
+  1. Stream image uploads to `blobPrefix` in parallel via
+     `writeImmutableStream` (which uses `lib-storage`'s `Upload` —
+     single-PUT for small files, multipart for large; both conditional).
+     Bounded concurrency via `p-limit` — **default 8, slider 4–16**
+     (industry sweet spot per Uppy/Tus practice; 4 is too conservative for
+     modern S3/R2 endpoints, 20+ saturates without gaining throughput).
+     Exponential backoff with jitter on transient failures.
   2. Generate the final bundle metadata from successfully uploaded blobs.
   3. Write `deployments.csv`, `media.csv`, and the always-empty
      `observations.csv` under `uploadPrefix`.
@@ -222,15 +293,44 @@ Dexie tracks every upload-session state needed for resume.
   they reference media paths from step 1, so deferring them lets us record
   actual sizes and `remoteETag` values in `media.csv` if the schema needs
   it.
-- **Hash sanity.** SHA-256 is the app's integrity digest. For each blob PUT,
-  send the SHA-256 as object metadata and, where the backend supports it,
-  as a checksum header. After upload, `statObject` must confirm size and
-  SHA-256 metadata. ETag is stored for diagnostics only; it is not treated
-  as a portable content hash across S3-compatible backends.
-- **No deletes, ever.** A partial upload leaves orphan objects in the
-  blob prefix or an incomplete final prefix; recovery is to re-run the same
-  session (skips verified `done` files, completes the rest) or abandon and
-  start a new prefix. Cleanup is an explicit future admin operation, not
+- **Hash sanity.** SHA-256 is the app's integrity digest. For each blob
+  PUT, send the SHA-256 as `x-amz-meta-sha256` object metadata and, where
+  the backend supports it, also as the native `x-amz-checksum-sha256`
+  header. **Verification path (portable, mandatory):** after upload,
+  `HEAD` the object and confirm `Content-Length` matches the recorded
+  size and `x-amz-meta-sha256` matches the recorded digest. This works on
+  every S3-compatible backend without exception. **Stronger verification
+  (optional, when supported):** AWS's `GetObjectAttributes` returns the
+  native checksum if it was stored; MinIO and R2 support is uneven.
+  The wrapper attempts `GetObjectAttributes` only on backends listed as
+  supporting it in `packages/s3-safe/README.md`; everywhere else, the
+  HEAD-metadata path is the contract. ETag is stored for diagnostics
+  only; it is not treated as a portable content hash across S3-compatible
+  backends.
+- **Multipart hygiene (mandatory deployment requirement).** Multipart
+  uploads that don't complete leave *billable orphan parts* — invisible
+  objects until aborted. Two policy knobs handle this together:
+  1. **`@aws-sdk/lib-storage` is configured with `leavePartsOnError: true`
+     explicitly.** The library's default is to call
+     `AbortMultipartUpload` on failure, which our IAM denies — relying on
+     the default would produce confusing AccessDenied errors on every
+     transient failure. Setting it explicitly to `true` matches the
+     wrapper's "no destructive APIs" stance: orphan parts simply remain.
+  2. **Every bucket the uploader writes to MUST have a lifecycle rule
+     that aborts incomplete multipart uploads after N days** (recommend
+     7). This is a deployment checklist item, not optional, and is the
+     only mechanism cleaning orphan parts in v0.
+
+  No narrowly-scoped wrapper abort method in v0 — the lifecycle rule is
+  the contract, and the wrapper's "no destructive APIs" invariant stays
+  whole. A future scoped abort (targeting only the uploader's own
+  `UploadId`s) is noted as a deliberate exception that would need its
+  own review.
+- **No deletes, ever** (object level). A partial upload leaves orphan
+  objects in the blob prefix or an incomplete final prefix; recovery is
+  to re-run the same session (skips verified `done` files, completes the
+  rest) or abandon and start a new prefix. Cleanup is an explicit future
+  admin operation, not
   part of this tool.
 - **The existing canonical upload tree stays read-only** in this tool —
   the uploader creates new prefixes, never modifies existing ones.
@@ -241,12 +341,32 @@ Higher bar than the tagger because every byte written is a canonical
 data byte, not an append-only sidecar. Four layers, same redundancy
 shape as the tagger:
 
-1. **IAM policy** — separate access key whose policy permits
-   `s3:ListBucket`, `s3:GetObject`, and `s3:PutObject` on the test
-   buckets only, with prefix conditions where the backend supports them:
+1. **IAM policy** — separate access key whose policy permits, on the test
+   buckets only (with prefix conditions where the backend supports them:
    `Collections/*/UploadBlobs/*` and `Collections/*/Uploads/*` for writes,
-   `Settings/locations.json` for reads. **No `s3:DeleteObject`** at the
-   policy level.
+   `Settings/locations.json` for reads):
+   - `s3:ListBucket`, `s3:GetObject`, `s3:PutObject` (read + simple write)
+   - `s3:ListBucketMultipartUploads`, `s3:ListMultipartUploadParts` (so
+     `lib-storage` can complete in-flight multipart uploads and so the
+     P5+ resume path can discover them)
+   - `s3:GetObjectAttributes` (optional — used for the stronger native
+     checksum verification on backends that support it; the portable
+     mandatory verification path uses `HEAD` + `x-amz-meta-sha256` and
+     does not require this permission)
+   - `s3:AbortMultipartUpload` — **only** if/when we implement the
+     narrowly-scoped wrapper abort method (see Multipart hygiene). Until
+     then this stays *out* of the IAM policy and orphan parts are
+     handled by the bucket lifecycle rule.
+   **No `s3:DeleteObject`** at the policy level, ever.
+
+   **CORS** — the bucket CORS policy must allow the static app origin to
+   call: `GET`, `HEAD`, `PUT`, `POST` only — **no `DELETE`**, matching
+   `leavePartsOnError: true` + no IAM abort. Plus expose `ETag` and
+   `x-amz-checksum-*` response headers, and accept the request headers
+   `Content-Type`, `Content-MD5`, `If-None-Match`, `x-amz-checksum-*`,
+   and the `x-amz-meta-*` keys we write. **P4 includes an explicit
+   multipart-write CORS preflight** (separate from P2's read CORS
+   preflight) before the first multipart upload is attempted.
 2. **`@sparcd/s3-safe` wrapper** — same single boundary. Same lint rule.
 3. **Bucket allowlist** — `S3_TEST_BUCKETS` env var, enforced at wrapper
    construction. Production bucket lift happens only after a recorded
@@ -268,8 +388,19 @@ size, hash) and writes nothing.
 Per file, before the file can be queued:
 
 - File type is JPEG. Other types are rejected in v0 (see Out of scope).
-- File size ≤ single-PUT ceiling (5 GiB on AWS / R2 / MinIO; default
-  uploader rejection threshold is 100 MiB to keep batches sane until P6).
+- **No app-level hard file-size limit** for normal camera-trap JPEGs:
+  `Upload` switches to multipart automatically above 5 MB and the S3
+  multipart ceiling (~5 TB) is far above any realistic camera-trap file.
+  Practical limits are runtime, not policy, and the inspect step surfaces
+  them as live validation rather than rejecting at queue time:
+  - **Browser/OS** — single-tab heap, available disk for the two-pass
+    hash, OPFS / IndexedDB quotas.
+  - **Network** — per-file expected duration at observed throughput; very
+    large files on a slow link warn the user up front.
+  - **Backend** — endpoint-specific per-object limits (rarely binding).
+
+  A soft warning fires above 100 MiB ("unusual for camera-trap"), but the
+  upload is allowed.
 - EXIF parses successfully; `DateTimeOriginal` (or fallback) is present
   and yields a parseable timestamp. Files without timestamps go into a
   "needs attention" bucket with a manual-entry affordance.
@@ -299,6 +430,13 @@ in the Educational Test collection.
 `media.csv` — one row per file. `media_path` is the full S3 object key for
 the uploaded blob under
 `Collections/<uuid>/UploadBlobs/<sessionId>/<sha256>.<ext>`.
+**`media.csv` stays byte-shape-compatible with the existing SPARC'd
+schema** — same column order, same column count — because existing
+Java/Next readers parse no-header CSVs by fixed position. Blob content
+hashes live in the `files` manifest inside `UploadComplete.json`
+(below), not in a new `media.csv` column. The implementer may later
+append a new column only after verifying every reader tolerates extra
+columns; the default v0 stance is "don't gamble on it."
 `file_name` is the local filename, and `deployment_id` matches the single
 row in `deployments.csv`. `mime_type` is `image/jpeg`.
 
@@ -332,14 +470,29 @@ Educational Test bucket:
   "uploadPath": "Collections/<uuid>/Uploads/<ISO>_<uploaderUser>",
   "blobPrefix": "Collections/<uuid>/UploadBlobs/<sessionId>/",
   "fileCount": <n>,
-  "bundleSha256": "<hash of UploadMeta + CSV payloads>",
+  "metadataBundleSha256": "<hash of UploadMeta + CSV payloads>",
+  "files": [
+    { "media_path": "Collections/<uuid>/UploadBlobs/<sessionId>/<sha>.JPG",
+      "size": <bytes>, "sha256": "<hex>" }
+    // ... one entry per blob
+  ],
   "completedAt": "<ISO timestamp>"
 }
 ```
 
-`bundleSha256` is deterministic: concatenate, in this exact order, the
-JSON-canonical UTF-8 bytes of `UploadMeta.json`, then the UTF-8 bytes of
-`deployments.csv`, `media.csv`, and `observations.csv`; compute SHA-256
+`metadataBundleSha256` covers **the metadata files only** (the manifest +
+the three CSVs), not the image blobs — it commits the bundle's *index*.
+`files` commits the bundle's *contents*: one entry per uploaded blob with
+its S3 key, size, and SHA-256. Together they let a verifier confirm both
+"the manifest I'm reading wasn't tampered with" and "every blob the
+manifest claims exists and matches the recorded hash." Sentinel-aware
+readers consume `files`; pre-sentinel readers (which never reach this
+file in the first place — see the partial-publish rule) are unaffected,
+so this stays additive.
+
+`metadataBundleSha256` is deterministic: concatenate, in this exact order,
+the JSON-canonical UTF-8 bytes of `UploadMeta.json`, then the UTF-8 bytes
+of `deployments.csv`, `media.csv`, and `observations.csv`; compute SHA-256
 over that byte stream.
 
 ## Keyboard shortcuts (initial set)
@@ -361,10 +514,52 @@ Smaller than the tagger; this tool is mouse-friendly by nature.
 | **P0** | Scaffold app, reuse the four shared packages (`s3-safe`, `camtrap`, `types`, `auth-ui`); shared Connection screen; drag-drop folder, virtualized file list (no S3 reads/writes) | None |
 | **P1** | EXIF parse + SHA-256 hash in Web Workers; thumbnail generation; validation rules; safe user/file key normalization | None |
 | **P2** | Deployment picker reading `Settings/locations.json`; validate exact path, JSON shape, and browser CORS read behavior | Reads only |
-| **P3** | In-memory Camtrap-DP CSV generation; preview `UploadMeta.json`, `UploadComplete.json`, and the three CSVs inline; verify completed shape against an existing Educational Test upload | Reads only |
-| **P4** | Append-only `writeImmutable` to test bucket with blob staging, final-prefix CSVs, and `UploadComplete.json` written last — **only after manual review of `@sparcd/s3-safe` + the upload sequence**; dry-run on by default | First writes, to test bucket |
-| **P5** | Resume on failure (Dexie-tracked file state plus persistent handles or reselect-folder reconciliation); skip verified already-uploaded blobs; size/SHA-256 metadata sanity check | Same as P4 |
-| **P6** | Multipart support for files above the single-PUT ceiling; production-bucket allowlist lift gated on reader sentinel support and a second review | Same scope as before |
+| **P3** | In-memory Camtrap-DP CSV generation; preview `UploadMeta.json`, `UploadComplete.json`, and the three CSVs inline; verify completed shape against an existing Educational Test upload; **verify the existing Java/Next readers actually follow `media.csv`'s `media_path` to a key under `UploadBlobs/` outside the upload prefix** — not just that the CSV shape matches. The marimo explorer presigns whatever `media_path` says, but the Java app may have a hardcoded assumption that image bytes live under the upload prefix; if so, the blob-staging layout needs a coordinated reader update before P4 production-bucket lift. | Reads only |
+| **P4** | Append-only streaming uploads (`writeImmutableStream` via `lib-storage`'s `Upload` — single-PUT or multipart per file) to test bucket; blob staging; final-prefix CSVs; `UploadComplete.json` written last — **only after manual review of `@sparcd/s3-safe` + the upload sequence**, **the `lib-storage` `IfNoneMatch`-on-complete spike** (drop down to manual multipart orchestration if needed; otherwise defer multipart), and **bucket lifecycle rule for incomplete multipart uploads is verified live**; dry-run on by default | First writes, to test bucket |
+| **P5** | Resume on failure: Dexie-tracked file state + persistent handles or reselect-folder reconciliation; **completed-blob skip + interrupted-file restart-from-scratch** (mid-file multipart resume via persisted `UploadId` + `ListParts` is a follow-on, not P5 baseline); size/SHA-256 sanity check | Same as P4 |
+| **P6** | Production-bucket allowlist lift, gated on reader sentinel support and a second review | Same scope as P5 |
+
+### P0 — done (2026-06-01)
+
+Scaffolded the app and established all four shared packages (this is the
+first app in the workspace to be built, so `packages/` started empty).
+
+- **`@sparcd/types`** — `S3Config`, `Collection`, `Species`, `UserSession`,
+  plus the pure `detectBackendDefaults(endpoint)` inference. Placement note:
+  detection lives here, not in `s3-safe`, because it is pure string logic
+  shared by `auth-ui`, which must not pull in the AWS SDK; `s3-safe`
+  re-exports it.
+- **`@sparcd/s3-safe`** — the blessed boundary: `SafeS3Client` with a
+  construction-time + per-call bucket allowlist, the read methods
+  (`listObjects` / `getObject` / `statObject` / `presignedGet`), and
+  `writeImmutable` (conditional `IfNoneMatch: "*"`, throwing
+  `PreconditionFailedError` / `ConditionalPutUnsupportedError`, no fallback).
+  `writeImmutableStream` remains a P4 addition. Not imported by the app yet
+  (P0 does no S3), so the SDK stays out of the P0 bundle.
+- **`@sparcd/auth-ui`** — the shared three-field Connection screen with the
+  endpoint-inferred region / path-style / secure behind "Advanced",
+  parameterized only by tool name.
+- **`@sparcd/camtrap`** — Camtrap-DP type surface
+  (`Deployment`/`Media`/`Observation`/`CamtrapBundle`); reader/writer land in
+  P3.
+
+App (`apps/sparcd-uploader`): Vite + React 18 + TS, Tailwind with the Field
+Notebook v2 tokens driven by CSS variables (light + first-pass walnut-dark
+swap, toggle in the chrome). Connection gate → tool chrome (section tabs
+New upload · History · Settings, upload-state pill). Four-step indicator with
+**Drop** and **Inspect** live: drag-and-drop or "Choose folder" with a
+recursive JPEG scan (entries API + `webkitdirectory`), and a virtualized file
+list (`@tanstack/react-virtual`) showing filename + size with `J`/`K` to move
+and `D` to drop the active row. Zustand holds the session; no Dexie yet
+(resume is P5). No S3 reads or writes. `tsc --noEmit` and `vite build` both
+pass; dev server boots and serves. Steps 3–4 and the other sections render
+honest "coming in P*" placeholders.
+
+Workspace plumbing: packages are consumed as TS source (no `dist/`) via Vite
+aliases + tsconfig paths. Decisions taken without blocking: used Tailwind
+directly rather than wiring shadcn/ui (the components are bespoke — sharp
+corners, hairline rules); `uploaderUser` provenance (open question 1) is not
+needed until P1/P2 and stays open.
 
 P0–P3 are fully usable as a local-only "prepare an upload bundle" tool
 with no S3 writes. P4 is the first write phase; P6 is the only phase
@@ -407,5 +602,7 @@ that may touch non-test buckets.
   validation, transcoding, and multipart story is its own project
 - RAW image formats — out in v0; JPEG only
 - User management / permissions admin
-- Files above the single-PUT ceiling — out until P6
+- OPFS source-folder mirroring — see "Why not OPFS staging" above; future
+  option if researcher workflows show frequent source-disappearance, not
+  in v0
 - Modifying existing uploads — never; the tool only creates new prefixes
