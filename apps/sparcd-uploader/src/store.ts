@@ -34,6 +34,7 @@ type UploaderState = {
   batchToken: number; // bumps each new batch; identifies a processing run
   uploaderUser: string; // free-text identity, normalized into a slug for keys
   selectedLocationKey: string | null; // chosen deployment location key (Assign)
+  selectedBucket: string | null; // target collection bucket (Assign)
   uploadDescription: string; // free-text description for UploadMeta
 
   connect: (config: S3Config) => void;
@@ -50,6 +51,7 @@ type UploaderState = {
   resetBatch: () => void;
   setUploaderUser: (value: string) => void;
   setSelectedLocationKey: (key: string | null) => void;
+  setSelectedBucket: (bucket: string | null) => void;
   setUploadDescription: (value: string) => void;
 };
 
@@ -67,6 +69,7 @@ export const useStore = create<UploaderState>((set) => ({
   batchToken: 0,
   uploaderUser: '',
   selectedLocationKey: null,
+  selectedBucket: null,
   uploadDescription: '',
 
   connect: (config) => set({ s3Config: config }),
@@ -130,5 +133,6 @@ export const useStore = create<UploaderState>((set) => ({
   // Stored raw; sanitizeUploaderUser derives the key-safe slug at point of use.
   setUploaderUser: (value) => set({ uploaderUser: value }),
   setSelectedLocationKey: (key) => set({ selectedLocationKey: key }),
+  setSelectedBucket: (bucket) => set({ selectedBucket: bucket }),
   setUploadDescription: (value) => set({ uploadDescription: value }),
 }));

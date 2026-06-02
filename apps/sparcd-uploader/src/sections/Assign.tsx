@@ -1,7 +1,13 @@
+import { useEffect } from 'react';
 import { useStore } from '../store';
 import { useLocations } from '../lib/useLocations';
+import { useCollections, useCollectionName } from '../lib/useCollections';
 import { DeploymentPicker } from '../components/DeploymentPicker';
+import { MetadataPreview } from '../components/MetadataPreview';
 import { sanitizeUploaderUser } from '../lib/normalize';
+
+// The collection authorized for this workspace; preselected when present.
+const DEFAULT_BUCKET = 'sparcd-8dbd9c43-5c3d-411d-8778-617d4693c69b';
 
 const sectionLabel =
   'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
@@ -27,10 +33,25 @@ export function Assign() {
   const setDescription = useStore((s) => s.setUploadDescription);
   const selectedLocationKey = useStore((s) => s.selectedLocationKey);
   const setSelectedLocationKey = useStore((s) => s.setSelectedLocationKey);
+  const selectedBucket = useStore((s) => s.selectedBucket);
+  const setSelectedBucket = useStore((s) => s.setSelectedBucket);
+  const files = useStore((s) => s.files);
 
   const { data, isLoading, isError, error } = useLocations(s3Config);
+  const collections = useCollections(s3Config);
   const slug = sanitizeUploaderUser(uploaderUser);
-  const canContinue = !!selectedLocationKey && !!slug;
+
+  // Preselect the authorized collection (else the first discovered) once.
+  useEffect(() => {
+    if (selectedBucket || !collections.data?.length) return;
+    const def = collections.data.find((c) => c.bucket === DEFAULT_BUCKET);
+    setSelectedBucket((def ?? collections.data[0]).bucket);
+  }, [collections.data, selectedBucket, setSelectedBucket]);
+
+  const collection = collections.data?.find((c) => c.bucket === selectedBucket) ?? null;
+  const collectionName = useCollectionName(s3Config, collection);
+  const location = data?.locations.find((l) => l.key === selectedLocationKey) ?? null;
+  const canContinue = !!selectedLocationKey && !!slug && !!collection;
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
@@ -104,15 +125,57 @@ export function Assign() {
       </section>
 
       <section>
-        <h2 className={sectionLabel}>Target collection &amp; preview</h2>
-        <div className="border border-ruleSoft bg-panel px-4 py-4">
-          <p className="font-body text-[13px] text-inkSoft">
-            Choosing the target collection bucket and previewing the five metadata files
-            (<span className="font-mono">UploadMeta.json</span>,{' '}
-            <span className="font-mono">UploadComplete.json</span>, and the three CSVs) lands in P3,
-            where the in-memory Camtrap-DP bundle is generated.
-          </p>
-        </div>
+        <h2 className={sectionLabel}>Target collection</h2>
+        {collections.isLoading && <LocationsState tone="mute" message="Discovering collections…" />}
+        {collections.isError && (
+          <LocationsState
+            tone="warn"
+            message={(collections.error as Error)?.message ?? 'Could not list collections.'}
+          />
+        )}
+        {collections.data && (
+          <div className="space-y-1.5">
+            <select
+              value={selectedBucket ?? ''}
+              onChange={(e) => setSelectedBucket(e.target.value || null)}
+              className="w-full border border-rule bg-paper px-3 py-2 font-mono text-[13px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
+            >
+              {collections.data.map((c) => (
+                <option key={c.bucket} value={c.bucket}>
+                  {c.bucket}
+                </option>
+              ))}
+            </select>
+            <p className="font-body text-[12px] text-inkMute">
+              {collectionName.data ? (
+                <>
+                  <span className="text-inkSoft">{collectionName.data}</span> ·{' '}
+                </>
+              ) : null}
+              Uploads land in this bucket under{' '}
+              <span className="font-mono">Collections/{collection?.uuid ?? '<uuid>'}/Uploads/</span>.
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2 className={sectionLabel}>Preview</h2>
+        {location && collection && slug ? (
+          <MetadataPreview
+            location={location}
+            collectionUuid={collection.uuid}
+            bucket={collection.bucket}
+            uploaderSlug={slug}
+            description={description}
+            files={files}
+          />
+        ) : (
+          <LocationsState
+            tone="mute"
+            message="Select a deployment, a target collection, and an uploader identity to preview the bundle."
+          />
+        )}
       </section>
 
       <div className="flex items-center justify-between gap-4 border-t border-ruleSoft pt-5">
@@ -130,7 +193,9 @@ export function Assign() {
               ? 'Continue to upload'
               : !selectedLocationKey
                 ? 'Select a deployment location first'
-                : 'Set an uploader identity first'
+                : !collection
+                  ? 'Select a target collection first'
+                  : 'Set an uploader identity first'
           }
           className={`bg-ink text-paper border border-ink px-3.5 py-1.5 text-[14px] font-body font-[600] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
             canContinue ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'

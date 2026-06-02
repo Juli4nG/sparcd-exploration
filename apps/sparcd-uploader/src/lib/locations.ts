@@ -155,5 +155,6 @@ export function locationToDeployment(loc: Location, collectionUuid: string): Dep
     locationName: loc.name,
     latitude: loc.latitude,
     longitude: loc.longitude,
+    elevation: loc.elevation,
   };
 }

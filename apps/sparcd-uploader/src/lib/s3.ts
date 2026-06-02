@@ -71,6 +71,35 @@ export async function fetchLocations(cfg: S3Config): Promise<LocationsResult> {
   return { ...parsed, settingsBucket };
 }
 
+export type CollectionRef = { bucket: string; uuid: string };
+
+// A per-collection bucket is `sparcd-<uuid>`; the settings bucket (`sparcd`,
+// `sparcd-settings-*`) is not a collection.
+const COLLECTION_BUCKET = /^sparcd-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/** Discover the collection buckets visible to these credentials (names only). */
+export async function listCollections(cfg: S3Config): Promise<CollectionRef[]> {
+  const buckets = await getClient(cfg).listBuckets();
+  return buckets
+    .map((b) => {
+      const m = b.match(COLLECTION_BUCKET);
+      return m ? { bucket: b, uuid: m[1] } : null;
+    })
+    .filter((c): c is CollectionRef => c !== null)
+    .sort((a, b) => a.bucket.localeCompare(b.bucket));
+}
+
+/** Read a collection's display name from its `collection.json`, or null. */
+export async function fetchCollectionName(cfg: S3Config, ref: CollectionRef): Promise<string | null> {
+  try {
+    const bytes = await getClient(cfg).getObject(ref.bucket, `Collections/${ref.uuid}/collection.json`);
+    const doc = JSON.parse(new TextDecoder().decode(bytes)) as { nameProperty?: string };
+    return doc.nameProperty?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 function translateReadError(err: unknown, bucket: string): Error {
   if (err instanceof BucketNotAllowedError) return err;
   const e = err as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };

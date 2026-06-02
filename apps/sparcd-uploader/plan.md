@@ -135,7 +135,7 @@ Settings/locations.json ─►  Deployment picker  ─►  Bundle builder       
                                             Upload queue (p-limit, Dexie)   │
                                                        │                     │
                                                        ▼                     ▼
-    writeImmutableStream() → blobPrefix images, then writeImmutable() → uploadPrefix CSVs + manifest
+    writeImmutableStream() → uploadPrefix images, then writeImmutable() → uploadPrefix CSVs + manifest
 ```
 
 ### Layout
@@ -214,13 +214,17 @@ Dexie tracks every upload-session state needed for resume.
   timestamp by one second, and retries with a fresh upload prefix.
   `UploadComplete.json` is the source of truth for whether a prefix is
   publishable.
-- **Blob staging.** Image bytes are uploaded first under a non-discovered
-  blob prefix:
-  `Collections/<uuid>/UploadBlobs/<sessionId>/<sha256>.<ext>`. The
-  canonical `media.csv` stores these full object keys in `media_path`, so
-  existing image display code can presign the media path directly even
-  though the bytes are outside the upload prefix. This avoids exposing a
-  half-populated upload directory while large files are still transferring.
+- **Blob placement (revised in P3 — was "UploadBlobs staging").** Image bytes
+  upload **under the upload prefix**, at
+  `Collections/<uuid>/Uploads/<stamp>_<slug>/<relpath>`, and `media.csv`'s
+  `media_path` points there. P3 verified the existing SPARC'd reader **lists
+  objects under the upload prefix and ignores `media_path`** (it presigns the
+  listed key), so the original `UploadBlobs/<sessionId>/<sha>.<ext>` staging —
+  meant to avoid exposing a half-populated directory — would have made every
+  image invisible to the existing app. The half-populated-directory concern is
+  instead handled by ordering: image bytes and CSVs first, then
+  `UploadMeta.json` last (upstream's completion marker), then our additive
+  `UploadComplete.json`.
 - **Upload mechanics (informed by industry patterns).** Big-company web
   uploaders (Google Drive, Dropbox, Uppy + Tus) converge on a small set of
   techniques; the S3-native equivalent (which we use since we have no Tus
@@ -267,20 +271,22 @@ Dexie tracks every upload-session state needed for resume.
   what Uppy uses, but it needs a Tus server in front. We deploy against
   raw S3-compatible storage with no extra service, so we use the S3-native
   equivalent (multipart with `lib-storage`) instead.
-- **Order of operations.**
-  1. Stream image uploads to `blobPrefix` in parallel via
-     `writeImmutableStream` (which uses `lib-storage`'s `Upload` —
-     single-PUT for small files, multipart for large; both conditional).
-     Bounded concurrency via `p-limit` — **default 8, slider 4–16**
-     (industry sweet spot per Uppy/Tus practice; 4 is too conservative for
-     modern S3/R2 endpoints, 20+ saturates without gaining throughput).
-     Exponential backoff with jitter on transient failures.
-  2. Generate the final bundle metadata from successfully uploaded blobs.
+- **Order of operations** (revised in P3 — blobs now under the upload prefix).
+  1. Stream image uploads under `uploadPrefix` (at
+     `<uploadPrefix>/<relpath>`) in parallel via `writeImmutableStream` (which
+     uses `lib-storage`'s `Upload` — single-PUT for small files, multipart for
+     large; both conditional). Bounded concurrency via `p-limit` — **default 8,
+     slider 4–16** (industry sweet spot per Uppy/Tus practice; 4 is too
+     conservative for modern S3/R2 endpoints, 20+ saturates without gaining
+     throughput). Exponential backoff with jitter on transient failures.
+  2. Generate the final bundle metadata from successfully uploaded images.
   3. Write `deployments.csv`, `media.csv`, and the always-empty
      `observations.csv` under `uploadPrefix`.
-  4. Write `UploadMeta.json` under `uploadPrefix`.
+  4. Write `UploadMeta.json` under `uploadPrefix` — this is **upstream
+     SPARC'd's completion marker**, so it must land after the images and CSVs.
   5. Write `UploadComplete.json` last under `uploadPrefix`; this is the
-     completion sentinel for new SPARC'd tools.
+     additional integrity sentinel for new SPARC'd tools (richer than
+     `UploadMeta.json` — carries the per-file hash manifest).
 - **Partial-publish rule.** S3 has no atomic directory publish, and this
   wrapper intentionally exposes no `copy` or overwrite APIs. Therefore P4
   may write final-prefix CSV/metadata files only in test buckets. Before
@@ -427,18 +433,19 @@ Per batch, before upload can start:
 `<collection-uuid>:<location-id>` to match the existing convention seen
 in the Educational Test collection.
 
-`media.csv` — one row per file. `media_path` is the full S3 object key for
-the uploaded blob under
-`Collections/<uuid>/UploadBlobs/<sessionId>/<sha256>.<ext>`.
-**`media.csv` stays byte-shape-compatible with the existing SPARC'd
-schema** — same column order, same column count — because existing
-Java/Next readers parse no-header CSVs by fixed position. Blob content
-hashes live in the `files` manifest inside `UploadComplete.json`
-(below), not in a new `media.csv` column. The implementer may later
-append a new column only after verifying every reader tolerates extra
-columns; the default v0 stance is "don't gamble on it."
-`file_name` is the local filename, and `deployment_id` matches the single
-row in `deployments.csv`. `mime_type` is `image/jpeg`.
+`media.csv` — one row per file. `media_path` is the full S3 object key for the
+uploaded image under `Collections/<uuid>/Uploads/<stamp>_<slug>/<relpath>`
+(P3-verified: under the upload prefix, **not** a separate `UploadBlobs` key).
+**`media.csv` is byte-shape-exact with the existing SPARC'd schema** — the
+verified **v016 11-column** layout, every field quoted, LF-terminated — because
+the existing Python readers parse no-header CSVs by fixed position. The full key
+is repeated in the `media_id` / `sequence_id` / `file_path` positions (cols
+0/2/5), matching the canonical writer; the **timestamp column (4) is left empty**
+on initial upload exactly as SPARC'd leaves it (per-image timestamps enter via
+the tagger). Blob content hashes live in the `files` manifest inside
+`UploadComplete.json` (below), not in a `media.csv` column.
+`file_name` (col 6) is the local filename, `deployment_id` matches the single
+row in `deployments.csv`, and `file_media_type` (col 7) is `image/jpeg`.
 
 `observations.csv` — always written as an empty file in v0. Observations
 are written later by sparcd-tagger as append-only versions under
@@ -467,18 +474,20 @@ Educational Test bucket:
 ```json
 {
   "schemaVersion": 1,
-  "uploadPath": "Collections/<uuid>/Uploads/<ISO>_<uploaderUser>",
-  "blobPrefix": "Collections/<uuid>/UploadBlobs/<sessionId>/",
+  "uploadPath": "Collections/<uuid>/Uploads/<stamp>_<uploaderUser>",
   "fileCount": <n>,
   "metadataBundleSha256": "<hash of UploadMeta + CSV payloads>",
   "files": [
-    { "media_path": "Collections/<uuid>/UploadBlobs/<sessionId>/<sha>.JPG",
+    { "media_path": "Collections/<uuid>/Uploads/<stamp>_<uploaderUser>/<relpath>",
       "size": <bytes>, "sha256": "<hex>" }
-    // ... one entry per blob
+    // ... one entry per image
   ],
   "completedAt": "<ISO timestamp>"
 }
 ```
+
+(P3 dropped the `blobPrefix` field — images live under `uploadPath`, so there is
+no separate blob prefix to record.)
 
 `metadataBundleSha256` covers **the metadata files only** (the manifest +
 the three CSVs), not the image blobs — it commits the bundle's *index*.
@@ -490,10 +499,12 @@ readers consume `files`; pre-sentinel readers (which never reach this
 file in the first place — see the partial-publish rule) are unaffected,
 so this stays additive.
 
-`metadataBundleSha256` is deterministic: concatenate, in this exact order,
-the JSON-canonical UTF-8 bytes of `UploadMeta.json`, then the UTF-8 bytes
-of `deployments.csv`, `media.csv`, and `observations.csv`; compute SHA-256
-over that byte stream.
+`metadataBundleSha256` is deterministic: concatenate, in this exact order, the
+UTF-8 bytes of `UploadMeta.json` **as written** (the 2-space-pretty form), then
+the UTF-8 bytes of `deployments.csv`, `media.csv`, and `observations.csv`;
+compute SHA-256 over that byte stream. (P3 implements it over the exact written
+bytes — deterministic given the inputs — rather than a separate canonical-JSON
+re-encoding, so the hash commits precisely what lands in the object.)
 
 ## Keyboard shortcuts (initial set)
 
@@ -660,6 +671,62 @@ added here and can land alongside per-file metadata editing. The AWS SDK now
 ships in the main bundle (~460 kB), expected for the first read phase. Open
 question 2 (first test bucket) is still unanswered — it gates P4 writes, not
 P2 reads.
+
+### P3 — done (2026-06-02)
+
+In-memory Camtrap-DP bundle generation plus an inline preview of all five
+metadata files, with the completed shape verified byte-for-byte against a live
+Educational Test upload and the upstream reader behavior confirmed. Reads only.
+
+- **Writer (`@sparcd/camtrap`).** `serializeDeployments` / `serializeMedia` /
+  `serializeObservations` emit the verified **v016 fixed-position** shapes
+  (deployments **23 cols**, media **11 cols**, observations **20 cols**),
+  every field quoted (QUOTE_ALL), LF-terminated with a trailing newline — a
+  byte-exact match to the live `2022.07.12.10.39.29_smalusa` upload (confirmed
+  by diffing generated rows against the real `deployments.csv`/`media.csv`
+  bytes). Plus `buildUploadMeta` + `serializeUploadMeta` (2-space pretty, LF, no
+  trailing newline; nested `uploadDate.{date,time}` with `nano`), `uploadStamp`
+  (`YYYY.MM.DD.HH.MM.SS` prefix), and `serializeUploadComplete`. `Deployment`
+  gained `elevation` (→ v016 `camera_height`, six decimals); `Observation`
+  gained `timestamp` (v016 col 4). The observations writer exists for the
+  tagger but v0 always writes an empty file.
+- **Bundle builder (`src/lib/bundle.ts`).** Assembles the five payloads from
+  the chosen deployment, identity slug, target collection, and processed files;
+  computes `metadataBundleSha256` over the exact bytes of `UploadMeta.json` +
+  the three CSVs via Web Crypto; resolves bundle-relative object names
+  (`sanitizeRelPath` + `resolveCollisions` seeded by the content hash) and keys
+  each `media_path` to the upload prefix.
+- **Target collection + preview UI.** Assign now discovers collection buckets
+  (`sparcd-<uuid>`, via `listBuckets`), preselects the authorized Educational
+  Test collection, lazily reads the selected collection's `collection.json` for
+  a display name, and renders a tabbed inline preview of all five files
+  (`observations.csv` shown as the empty-file case). Continue is gated on a
+  deployment + target collection + uploader slug.
+
+- **CRITICAL verification finding — blob layout pivoted to upstream-compatible.**
+  P3's required check was whether the existing reader follows `media.csv`'s
+  `media_path`. **It does not.** Upstream (`server/s3/s3_access_helpers.py:
+  get_s3_images`, Python — not Java) **lists objects under the upload prefix and
+  presigns the listed key**, using `media.csv` only to *decorate* already-listed
+  images with timestamps/species (matched on the full key). Live data confirms:
+  images sit at `…/Uploads/<stamp>_<user>/<relpath>` and `media_path` points
+  there. The plan's original `UploadBlobs/<sessionId>/<sha>.<ext>` staging would
+  make every uploaded image **invisible** to the existing SPARC'd app. With the
+  user's decision, the layout is now **upstream-compatible**: image bytes live
+  **under the upload prefix**, and `media_path` =
+  `Collections/<uuid>/Uploads/<stamp>_<slug>/<relpath>`. The S3-sync section,
+  the `media.csv` notes, and the `UploadComplete.json` schema below are updated
+  to match; **`UploadBlobs` is removed from v0.**
+- **Sentinel finding.** Upstream has no `UploadComplete.json` reader — it treats
+  presence of **`UploadMeta.json`** as the completion marker
+  (`__check_upload_complete`). So for upstream compatibility, P4 must write
+  `UploadMeta.json` **last among upstream-visible objects**; our additive
+  `UploadComplete.json` is a richer integrity sentinel our own tools read.
+
+**P4 must revisit (now that `UploadBlobs` is gone):** the IAM `UploadBlobs/*`
+write condition (→ images now write under `Uploads/*`), the Dexie `blobPrefix`
+field, the half-populated-directory concern (handled by writing `UploadMeta.json`
+last, not by a hidden blob prefix), and the upload order of operations.
 
 P0–P3 are fully usable as a local-only "prepare an upload bundle" tool
 with no S3 writes. P4 is the first write phase; P6 is the only phase
