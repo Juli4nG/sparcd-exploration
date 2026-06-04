@@ -6,6 +6,7 @@ import { parseCollectionKey, presignImage } from '../lib/s3';
 import { SpeciesPanel } from '../components/SpeciesPanel';
 import { Cheatsheet } from '../components/Cheatsheet';
 import { SyncDialog } from '../components/SyncDialog';
+import { SnapshotsDialog } from '../components/SnapshotsDialog';
 import { Overview, type PickMods, type ViewKind } from '../components/Overview';
 import { groupBursts, type BurstGrouping } from '../lib/bursts';
 import { rangeSet, toggleIndex, burstIndexSet } from '../lib/selection';
@@ -66,6 +67,7 @@ export function Tag() {
   const [recent, setRecent] = useState<string[]>([]);
   const [showCheatsheet, setShowCheatsheet] = useState(false);
   const [showSync, setShowSync] = useState(false);
+  const [showSnapshots, setShowSnapshots] = useState(false);
   const [savedAt, setSavedAt] = useState(0);
   const filterRef = useRef<HTMLInputElement>(null);
 
@@ -262,6 +264,13 @@ export function Tag() {
             </button>
           )}
           <button
+            onClick={() => setShowSnapshots(true)}
+            className="text-[12px] font-mono border border-rule px-2.5 py-1 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            title="Browse and restore prior canonical snapshots of this upload"
+          >
+            Snapshots…
+          </button>
+          <button
             onClick={() => setShowSync(true)}
             className="text-[12px] font-mono border border-ink px-2.5 py-1 text-ink hover:bg-panelHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
             title="Review and sync local edits to the canonical S3 files"
@@ -312,6 +321,7 @@ export function Tag() {
       {showSync && (
         <SyncDialog ctx={ctx} images={list} drafts={drafts} onClose={() => setShowSync(false)} />
       )}
+      {showSnapshots && <SnapshotsDialog ctx={ctx} onClose={() => setShowSnapshots(false)} />}
     </div>
   );
 

@@ -189,6 +189,21 @@ export type SyncIO = {
 
 export type PlannedWrite = { role: CanonicalRole; key: string; bytes: number; baseETag: string };
 
+/** A canonical body prepared for writing: the bytes + their SHA-256, by role. */
+type PreparedWrite = { role: CanonicalRole; body: string; hash: string };
+
+/** The snapshot's `manifest.json`, written last so recovery ignores partial
+ *  prefixes. The shape both the writer (`writeSnapshotSet`) and the reader
+ *  (`s3.listSnapshots`) agree on. */
+export type SnapshotManifest = {
+  schemaVersion: 1;
+  user: string;
+  editStamp: string;
+  files: { name: string; etag: string; sha256: string }[];
+};
+
+const byteLen = (s: string): number => new TextEncoder().encode(s).length;
+
 export type SyncResult =
   | { status: 'noop' }
   | { status: 'dry-run'; summary: DiffSummary; snapshotPrefix: string; writes: PlannedWrite[] }
@@ -236,7 +251,7 @@ async function buildWrites(
   plan: SyncPlan,
   user: string,
   editStamp: string,
-): Promise<{ role: CanonicalRole; body: string; hash: string }[]> {
+): Promise<PreparedWrite[]> {
   const allMediaEdits = [...plan.tagEdits, ...plan.timeEdits];
   const bodies: Record<CanonicalRole, string> = {
     media: mergeMedia(current.media.text, allMediaEdits),
@@ -251,7 +266,15 @@ async function buildWrites(
   });
   bodies.uploadMeta = serializeUploadMeta(meta);
 
-  const out: { role: CanonicalRole; body: string; hash: string }[] = [];
+  return prepareWrites(current, bodies);
+}
+
+/** Keep only the roles whose bytes actually change, hashing each kept body. */
+async function prepareWrites(
+  current: CanonicalState,
+  bodies: Record<CanonicalRole, string>,
+): Promise<PreparedWrite[]> {
+  const out: PreparedWrite[] = [];
   for (const role of ROLE_ORDER) {
     if (bodies[role] === current[role].text) continue; // unchanged → don't rewrite
     out.push({ role, body: bodies[role], hash: await sha256Hex(bodies[role]) });
@@ -305,8 +328,8 @@ async function writeSnapshotSet(
   for (const role of ROLE_ORDER) {
     await io.writeSnapshot(`${snapshotPrefix}${SNAPSHOT_FILE[role]}`, current[role].text, CONTENT_TYPE[role]);
   }
-  const manifest = {
-    schemaVersion: 1 as const,
+  const manifest: SnapshotManifest = {
+    schemaVersion: 1,
     user,
     editStamp,
     files: ROLE_ORDER.map((role) => ({
@@ -318,36 +341,107 @@ async function writeSnapshotSet(
   await io.writeSnapshot(`${snapshotPrefix}manifest.json`, JSON.stringify(manifest, null, 2), 'application/json');
 }
 
+/**
+ * Resume a prior partial sync/restore: verify written/pending objects against
+ * the current remote, then continue from the first pending one. Returns the
+ * terminal `SyncResult` when a journal is present (whether it conflicts,
+ * completes, or describes a dry-run), or `null` when there is no journal and the
+ * caller should plan a fresh write. The journal carries the exact bodies, so a
+ * resume completes the originally-intended write even after a browser reload —
+ * and a pending sync or restore journal must be finished (or its conflict
+ * resolved) before a new operation begins.
+ */
+async function tryResume(
+  io: SyncIO,
+  resumeJournal: SyncJournal | undefined,
+  dryRun: boolean,
+): Promise<SyncResult | null> {
+  if (!resumeJournal) return null;
+  const journal = resumeJournal;
+  const cur = await io.loadCanonical();
+  const decision = planResume(journal, remoteStates(cur));
+  if (decision.kind === 'conflict')
+    return { status: 'conflict', role: decision.role, reason: decision.reason };
+  if (decision.kind === 'done') {
+    if (dryRun)
+      return { status: 'dry-run', summary: EMPTY_SUMMARY, snapshotPrefix: journal.snapshotPrefix, writes: [] };
+    await io.clearJournal();
+    return { status: 'synced', summary: EMPTY_SUMMARY, newETags: collectNewETags(journal) };
+  }
+  if (dryRun) {
+    // A dry-run never writes — describe the pending objects a real resume would.
+    return {
+      status: 'dry-run',
+      summary: EMPTY_SUMMARY,
+      snapshotPrefix: journal.snapshotPrefix,
+      writes: journal.objects
+        .slice(decision.fromIndex)
+        .filter((o) => o.status === 'pending')
+        .map((o) => ({ role: o.role, key: o.key, bytes: byteLen(o.body), baseETag: o.baseETag })),
+    };
+  }
+  return writePending(io, journal, decision.fromIndex);
+}
+
+type CommitCtx = {
+  bucket: string;
+  uploadPrefix: string;
+  user: string;
+  current: CanonicalState;
+  writes: PreparedWrite[];
+  editStamp: string;
+  snapshotPrefix: string;
+};
+
+/**
+ * The shared live-write path for both sync and restore: snapshot the current
+ * canonical state immutably (manifest last, +1s re-stamp once on a 412
+ * collision), journal the intended writes, then conditionally replace each
+ * changed canonical object in order. The journal is left in place on a mid-write
+ * conflict so the next attempt resumes instead of restarting.
+ */
+async function commitWrites(io: SyncIO, c: CommitCtx, summary: DiffSummary): Promise<SyncResult> {
+  // 1. Immutable pre-change snapshot, with a single +1s re-stamp on collision.
+  let activePrefix = c.snapshotPrefix;
+  try {
+    await writeSnapshotSet(io, activePrefix, c.current, c.user, c.editStamp);
+  } catch (err) {
+    if (!isPrecondition(err)) throw err;
+    const bumped = snapshotStamp(new Date(io.now().getTime() + 1000));
+    activePrefix = snapshotPrefixOf(c.uploadPrefix, c.user, bumped);
+    await writeSnapshotSet(io, activePrefix, c.current, c.user, c.editStamp);
+  }
+
+  // 2. Journal the intended writes before the first canonical PUT.
+  const journal: SyncJournal = {
+    id: `${c.bucket}::${c.uploadPrefix}`,
+    bucket: c.bucket,
+    uploadPrefix: c.uploadPrefix,
+    snapshotPrefix: activePrefix,
+    user: c.user,
+    startedAt: io.now().toISOString(),
+    objects: c.writes.map<JournalObject>((w) => ({
+      role: w.role,
+      key: key(c.uploadPrefix, w.role),
+      baseETag: c.current[w.role].etag,
+      body: w.body,
+      intendedHash: w.hash,
+      status: 'pending',
+    })),
+  };
+  await io.saveJournal(journal);
+
+  // 3. Conditional canonical replacement, in order, recording each new ETag.
+  const result = await writePending(io, journal, 0);
+  if (result.status === 'synced') return { ...result, summary };
+  return result;
+}
+
 export async function runSync(params: SyncParams, io: SyncIO): Promise<SyncResult> {
   const { bucket, uploadPrefix, user, plan, dryRun } = params;
 
-  // Resume a prior partial sync: verify written/pending against current, continue.
-  if (params.resumeJournal) {
-    const journal = params.resumeJournal;
-    const cur = await io.loadCanonical();
-    const decision = planResume(journal, remoteStates(cur));
-    if (decision.kind === 'conflict')
-      return { status: 'conflict', role: decision.role, reason: decision.reason };
-    if (decision.kind === 'done') {
-      if (dryRun)
-        return { status: 'dry-run', summary: EMPTY_SUMMARY, snapshotPrefix: journal.snapshotPrefix, writes: [] };
-      await io.clearJournal();
-      return { status: 'synced', summary: EMPTY_SUMMARY, newETags: collectNewETags(journal) };
-    }
-    if (dryRun) {
-      // A dry-run never writes — describe the pending objects a real resume would.
-      return {
-        status: 'dry-run',
-        summary: EMPTY_SUMMARY,
-        snapshotPrefix: journal.snapshotPrefix,
-        writes: journal.objects
-          .slice(decision.fromIndex)
-          .filter((o) => o.status === 'pending')
-          .map((o) => ({ role: o.role, key: o.key, bytes: new TextEncoder().encode(o.body).length, baseETag: o.baseETag })),
-      };
-    }
-    return writePending(io, journal, decision.fromIndex);
-  }
+  const resumed = await tryResume(io, params.resumeJournal, dryRun);
+  if (resumed) return resumed;
 
   if (planIsEmpty(plan)) return { status: 'noop' };
 
@@ -366,9 +460,7 @@ export async function runSync(params: SyncParams, io: SyncIO): Promise<SyncResul
 
   const editStamp = javaEditStamp(io.now());
   const writes = await buildWrites(current, plan, user, editStamp);
-
-  const stamp = snapshotStamp(io.now());
-  const snapshotPrefix = snapshotPrefixOf(uploadPrefix, user, stamp);
+  const snapshotPrefix = snapshotPrefixOf(uploadPrefix, user, snapshotStamp(io.now()));
 
   if (dryRun) {
     return {
@@ -378,48 +470,67 @@ export async function runSync(params: SyncParams, io: SyncIO): Promise<SyncResul
       writes: writes.map((w) => ({
         role: w.role,
         key: key(uploadPrefix, w.role),
-        bytes: new TextEncoder().encode(w.body).length,
+        bytes: byteLen(w.body),
         baseETag: current[w.role].etag,
       })),
     };
   }
 
-  // --- Live write path ------------------------------------------------------
+  return commitWrites(io, { bucket, uploadPrefix, user, current, writes, editStamp, snapshotPrefix }, plan.summary);
+}
 
-  // 1. Immutable pre-change snapshot, with a single +1s re-stamp on collision.
-  let activePrefix = snapshotPrefix;
-  try {
-    await writeSnapshotSet(io, activePrefix, current, user, editStamp);
-  } catch (err) {
-    if (!isPrecondition(err)) throw err;
-    const bumped = snapshotStamp(new Date(io.now().getTime() + 1000));
-    activePrefix = snapshotPrefixOf(uploadPrefix, user, bumped);
-    await writeSnapshotSet(io, activePrefix, current, user, editStamp);
+// --- Restore (P5) ----------------------------------------------------------
+
+export type RestoreParams = {
+  bucket: string;
+  uploadPrefix: string;
+  /** Who is performing the restore — stamps the new pre-restore snapshot path. */
+  user: string;
+  /** The snapshot bodies to write back, by role. */
+  bodies: Record<CanonicalRole, string>;
+  dryRun: boolean;
+  /** A journal left by a prior partial sync/restore, to resume instead of starting fresh. */
+  resumeJournal?: SyncJournal;
+};
+
+/**
+ * Restore a prior snapshot: write its `media.csv` / `observations.csv` /
+ * `UploadMeta.json` back verbatim through the same conditional-replacement flow
+ * a sync uses. The snapshot bytes are restored exactly (no merge, no re-derived
+ * `UploadMeta` tally) — an exact rollback — and `IfMatch` is taken against the
+ * *current* remote ETags, so a concurrent write since the restore was started is
+ * caught as a conflict rather than silently clobbered. The current (pre-restore)
+ * state is itself snapshotted first, so a restore is as recoverable as a sync.
+ * Only the files whose bytes differ from the current canonical are rewritten.
+ */
+export async function runRestore(params: RestoreParams, io: SyncIO): Promise<SyncResult> {
+  const { bucket, uploadPrefix, user, bodies, dryRun } = params;
+
+  const resumed = await tryResume(io, params.resumeJournal, dryRun);
+  if (resumed) return resumed;
+
+  const current = await io.loadCanonical();
+  const writes = await prepareWrites(current, bodies);
+  if (writes.length === 0) return { status: 'noop' };
+
+  const editStamp = javaEditStamp(io.now());
+  const snapshotPrefix = snapshotPrefixOf(uploadPrefix, user, snapshotStamp(io.now()));
+
+  if (dryRun) {
+    return {
+      status: 'dry-run',
+      summary: EMPTY_SUMMARY,
+      snapshotPrefix,
+      writes: writes.map((w) => ({
+        role: w.role,
+        key: key(uploadPrefix, w.role),
+        bytes: byteLen(w.body),
+        baseETag: current[w.role].etag,
+      })),
+    };
   }
 
-  // 2. Journal the intended writes before the first canonical PUT.
-  const journal: SyncJournal = {
-    id: `${bucket}::${uploadPrefix}`,
-    bucket,
-    uploadPrefix,
-    snapshotPrefix: activePrefix,
-    user,
-    startedAt: io.now().toISOString(),
-    objects: writes.map<JournalObject>((w) => ({
-      role: w.role,
-      key: key(uploadPrefix, w.role),
-      baseETag: current[w.role].etag,
-      body: w.body,
-      intendedHash: w.hash,
-      status: 'pending',
-    })),
-  };
-  await io.saveJournal(journal);
-
-  // 3. Conditional canonical replacement, in order, recording each new ETag.
-  const result = await writePending(io, journal, 0);
-  if (result.status === 'synced') return { ...result, summary: plan.summary };
-  return result;
+  return commitWrites(io, { bucket, uploadPrefix, user, current, writes, editStamp, snapshotPrefix }, EMPTY_SUMMARY);
 }
 
 function remoteStates(state: CanonicalState): Record<CanonicalRole, RemoteState> {

@@ -5,8 +5,8 @@
 // store/query side-effects (it owns those React handles).
 
 import type { S3Config } from '@sparcd/types';
-import { buildSyncPlan, runSync, type SyncResult } from './sync';
-import { makeSyncIO, loadCanonicalState } from './s3';
+import { buildSyncPlan, runSync, runRestore, type SyncResult } from './sync';
+import { makeSyncIO, loadCanonicalState, loadSnapshotBodies } from './s3';
 import {
   getUpload,
   groundUpload,
@@ -68,6 +68,43 @@ export async function performSync(args: SyncArgs): Promise<SyncResult> {
     },
     io,
   );
+
+  if (result.status === 'synced' && !dryRun) {
+    const fresh = await loadCanonicalState(cfg, bucket, uploadPrefix);
+    await groundUpload(bucket, uploadPrefix, fresh);
+  }
+  return result;
+}
+
+export type RestoreArgs = {
+  cfg: S3Config;
+  bucket: string;
+  uploadPrefix: string;
+  user: string;
+  /** Full snapshot prefix `<uploadPrefix>.sparcd-tagger-snapshots/<user>/<stamp>/`. */
+  snapshotPrefix: string;
+  dryRun: boolean;
+};
+
+/**
+ * Restore a chosen snapshot (dry-run or live). Loads the snapshot bodies, runs
+ * them back through the conditional-replacement flow, and — on a successful live
+ * write — re-grounds on the now-restored canonical state. Resumes a prior
+ * partial sync/restore journal if one exists for this upload (the journal must
+ * be finished before a new write begins).
+ */
+export async function performRestore(args: RestoreArgs): Promise<SyncResult> {
+  const { cfg, bucket, uploadPrefix, user, snapshotPrefix, dryRun } = args;
+
+  const bodies = await loadSnapshotBodies(cfg, bucket, snapshotPrefix);
+  const resumeJournal = await loadSyncJournal(bucket, uploadPrefix);
+
+  const io = makeSyncIO(cfg, bucket, uploadPrefix, {
+    save: saveSyncJournal,
+    clear: () => clearSyncJournal(bucket, uploadPrefix),
+  });
+
+  const result = await runRestore({ bucket, uploadPrefix, user, bodies, dryRun, resumeJournal }, io);
 
   if (result.status === 'synced' && !dryRun) {
     const fresh = await loadCanonicalState(cfg, bucket, uploadPrefix);

@@ -3,10 +3,12 @@ import { useStore } from '../store';
 import { useDraftStore } from '../lib/drafts';
 import { listDirtyDrafts, type DraftRecord } from '../lib/db';
 
-// Local recovery view (History section). P3 is local-only: this surfaces every
-// upload that still has unsaved drafts in IndexedDB so a closed/reopened tab can
-// jump back to its work or discard it. The S3 snapshot/version recovery flow
-// (loading prior canonical snapshots) lands in P5 once the sync path exists.
+// Local recovery view (History section). This surfaces every upload that still
+// has unsaved drafts in IndexedDB so a closed/reopened tab can jump back to its
+// work or discard it. The S3 snapshot/version recovery flow (restoring prior
+// canonical snapshots, P5) is per-upload and lives in the Tag workspace's
+// "Snapshots…" action, where the upload's bucket/prefix context exists; a
+// cross-upload snapshot browser is the P6 History section's job.
 
 type Group = {
   bucket: string;
@@ -86,8 +88,8 @@ export function Recovery() {
           <h1 className="font-display text-[22px] text-ink">Recovery</h1>
           <p className="text-[13px] text-inkSoft font-body mt-1">
             Uploads with unsaved local edits, kept in this browser. Reopen one to keep tagging or
-            discard its local changes. Synced snapshot/version recovery arrives with the S3 sync
-            path (P5).
+            discard its local changes. To restore a prior <em>synced</em> snapshot, open the upload
+            and use the Tag workspace’s “Snapshots…” action.
           </p>
         </header>
 

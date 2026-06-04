@@ -1261,6 +1261,92 @@ flow (`runSync` already grounds + journals, so a restore is "sync these bodies")
 The History/Recovery view (`src/sections/Recovery.tsx`) is the place to surface
 remote snapshots alongside the local dirty drafts it already shows.
 
+### P5 — implementation report (done)
+
+Status: **complete — snapshot/version recovery, restore reuses the P4 write
+path.** `pnpm --filter sparcd-tagger check` (tsc), `pnpm test` (camtrap 39 +
+uploader 36 + s3-safe 5 + **tagger 46**, the 8 new being `restore.test.ts`), and
+`pnpm --filter sparcd-tagger build` all pass. The default Vitest suite still runs
+fully offline — restore I/O is injected through the same `SyncIO` fakes the sync
+tests use. No new deps. A restore writes to S3 only on the live (dry-run-off)
+path, exactly like a sync.
+
+**Restore is a sync with snapshot bodies instead of merged drafts
+(`src/lib/sync.ts`).** Refactored `runSync` so sync and restore share one
+live-write path, then added `runRestore`:
+- Extracted `tryResume` (the per-object journal resume block, formerly inline in
+  `runSync`) and `commitWrites` (immutable snapshot → journal → in-order
+  conditional `replaceIfUnchanged`, with the +1s re-stamp on a 412 collision).
+  `runSync`'s behaviour is unchanged — its 13 tests still pass against the
+  refactor.
+- `runRestore({ bucket, uploadPrefix, user, bodies, dryRun, resumeJournal }, io)`
+  loads the current canonical, keeps only the snapshot bodies whose bytes differ
+  from current (`prepareWrites`, also factored out of `buildWrites`), and writes
+  them back **verbatim** through `commitWrites`. Key decisions:
+  - **Exact rollback, no merge.** The snapshot `media.csv` / `observations.csv` /
+    `UploadMeta.json` are restored byte-for-byte — no re-derived `UploadMeta`
+    tally, no appended edit comment. The restored state is exactly the snapshot.
+  - **`IfMatch` against the *current* remote ETags**, not the snapshot's — a
+    concurrent write since the restore began is caught as a conflict, never
+    clobbered.
+  - **The current (pre-restore) state is snapshotted first** via the same
+    `commitWrites` snapshot step, so a restore is itself recoverable.
+  - Exported `SnapshotManifest` type (the shape `writeSnapshotSet` writes and the
+    reader below consumes) so writer and reader can't drift.
+
+**Snapshot listing + body loading (`src/lib/s3.ts`).** `listSnapshots` walks the
+two snapshot levels (`<user>/<stamp>/`) with `listCommonPrefixes` and reads each
+`manifest.json`; a stamp prefix whose manifest is **absent or unparseable is
+skipped** (the manifest is written last, so a partial/abandoned snapshot has
+none — the plan's "recovery ignores prefixes without a complete manifest"
+contract). Returns `SnapshotRef[]` newest-first. `loadSnapshotBodies` GETs the
+three canonical files of a chosen snapshot. Both go through the read-scoped
+client and reuse the uploader's CORS error translation.
+
+**Runner glue (`src/lib/syncRunner.ts`).** `performRestore` loads the snapshot
+bodies, picks up any prior partial journal for the upload, runs `runRestore`, and
+on a successful live write re-grounds on the now-restored canonical state. Note:
+the resume journal is keyed `${bucket}::${uploadPrefix}` and shared by sync and
+restore — a pending journal (from either) must be finished (or its conflict
+resolved) before a new write begins; since the journal stores the exact bodies,
+resuming always completes the originally-intended write safely. Documented in
+`tryResume`/`performRestore`.
+
+**Restore UI (`src/components/SnapshotsDialog.tsx`, Tag toolbar).** A
+"Snapshots…" button in the Tag toolbar (next to "Sync…") opens a dialog listing
+the upload's recoverable snapshots (stamp · user · file count). Picking one opens
+a restore pane that **previews via a forced dry-run** (writes nothing), shows
+which files would be restored + where the current state will be snapshotted, then
+restores it — gated on the persisted **dry-run default** and a non-empty Tagger
+identity, and surfacing the same conflict view as the sync dialog
+(discard-and-reload / keep editing). The Chrome `StatePill` is fed the same
+states a sync produces.
+
+**Recovery section copy (`src/sections/Recovery.tsx`).** Updated to point at the
+per-upload "Snapshots…" action. Restore lives in the **Tag workspace** (not the
+History/Recovery list) because it needs the upload's bucket/prefix/identity
+context, which the dirty-draft list doesn't carry; a cross-upload snapshot
+browser is the **P6 History** section's job (the phase table already assigns
+"History (surfaces the P5 recovery capability)" to P6).
+
+**Deliberate deferrals (for the P6 agent):**
+- **Cross-upload snapshot browser in History.** P5 surfaces restore per-upload in
+  the Tag workspace; the History section listing snapshots across uploads
+  (alongside the local dirty drafts it already shows) is P6.
+- **Restore does not reconcile local drafts.** After a live restore the canonical
+  base changes and the workspace re-grounds + refetches, but existing local
+  drafts are left intact (they now diff against the restored base). Marking them
+  clean would be wrong since they may still differ; the user re-syncs or discards.
+- **Exact-rollback vs. audited restore.** A restore intentionally writes the
+  snapshot bytes verbatim (no "Restored by … on …" edit comment), so the result
+  is byte-identical to the snapshot. If an audit trail of *restores* (not just
+  syncs) is wanted in `UploadMeta.editComments`, that's a deliberate future
+  divergence, not a bug.
+- Live CORS / `species.json` presence / `IfMatch` enforcement remain
+  **unverified** (no credentials) — same `.env` + `pnpm --filter sparcd-tagger
+  dev` check P0–P4 flagged; additionally exercise a real sync (to create a
+  snapshot) then a real restore of it against a write-allowed test bucket.
+
 ## Open questions for before P0
 
 1. **User identity for snapshots and edit comments.** The IAM access key

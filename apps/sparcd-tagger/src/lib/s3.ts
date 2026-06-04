@@ -8,8 +8,8 @@
 import { SafeS3Client, BucketNotAllowedError } from '@sparcd/s3-safe';
 import type { S3Config } from '@sparcd/types';
 import { sha256Hex } from './hash';
-import type { CanonicalState, SyncIO } from './sync';
-import type { SyncJournal } from './syncJournal';
+import type { CanonicalState, SyncIO, SnapshotManifest } from './sync';
+import type { SyncJournal, CanonicalRole } from './syncJournal';
 
 // Not a security boundary in a static app — the wrapper just requires an
 // explicit scope. The connected key's IAM policy and bucket CORS gate access.
@@ -195,6 +195,87 @@ export async function loadCanonicalState(
     loadObject(cfg, bucket, `${uploadPrefix}${CANONICAL_FILE.media}`, 'media.csv'),
     loadObject(cfg, bucket, `${uploadPrefix}${CANONICAL_FILE.observations}`, 'observations.csv'),
     loadObject(cfg, bucket, `${uploadPrefix}${CANONICAL_FILE.uploadMeta}`, 'UploadMeta.json'),
+  ]);
+  return { media, observations, uploadMeta };
+}
+
+// --- Snapshots (P5 recovery source) ----------------------------------------
+
+// Every sync/restore writes an immutable pre-change snapshot under this prefix,
+// with `manifest.json` last. A prefix without a complete manifest is an
+// abandoned partial snapshot and is ignored on recovery.
+const SNAPSHOTS_DIR = '.sparcd-tagger-snapshots/';
+
+/** One recoverable snapshot: where it lives + who/when, plus its manifest. */
+export type SnapshotRef = {
+  prefix: string; // full `<uploadPrefix>.sparcd-tagger-snapshots/<user>/<stamp>/`
+  user: string;
+  stamp: string;
+  manifest: SnapshotManifest;
+};
+
+/**
+ * List the recoverable snapshots under an upload prefix, newest first. Walks the
+ * two snapshot levels (`<user>/<stamp>/`) with a delimiter and reads each
+ * `manifest.json`; a stamp prefix whose manifest is absent or unparseable is an
+ * incomplete snapshot and is skipped (the manifest is written last, so a partial
+ * write leaves none).
+ */
+export async function listSnapshots(
+  cfg: S3Config,
+  bucket: string,
+  uploadPrefix: string,
+): Promise<SnapshotRef[]> {
+  const client = getClient(cfg);
+  const root = `${uploadPrefix}${SNAPSHOTS_DIR}`;
+  let userDirs: string[];
+  try {
+    userDirs = await client.listCommonPrefixes(bucket, root);
+  } catch (err) {
+    throw translateS3Error(err, 'snapshots');
+  }
+  const refs: SnapshotRef[] = [];
+  await Promise.all(
+    userDirs.map(async (userDir) => {
+      const user = decodeURIComponent(userDir.slice(root.length).replace(/\/$/, ''));
+      const stampDirs = await client.listCommonPrefixes(bucket, userDir);
+      await Promise.all(
+        stampDirs.map(async (stampDir) => {
+          try {
+            const bytes = await client.getObject(bucket, `${stampDir}manifest.json`);
+            const manifest = JSON.parse(new TextDecoder().decode(bytes)) as SnapshotManifest;
+            if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.files)) return;
+            const stamp = stampDir.replace(/\/$/, '').split('/').pop() ?? '';
+            refs.push({ prefix: stampDir, user, stamp, manifest });
+          } catch {
+            // No manifest (incomplete) or unreadable — not a recoverable snapshot.
+          }
+        }),
+      );
+    }),
+  );
+  // Stamp is `uuuu-MM-ddTHH-mm-ss`, lexically sortable; newest first.
+  return refs.sort((a, b) => b.stamp.localeCompare(a.stamp) || a.user.localeCompare(b.user));
+}
+
+/** Load the three canonical bodies of one snapshot, to restore them in place. */
+export async function loadSnapshotBodies(
+  cfg: S3Config,
+  bucket: string,
+  snapshotPrefix: string,
+): Promise<Record<CanonicalRole, string>> {
+  const client = getClient(cfg);
+  const read = async (name: string, what: string): Promise<string> => {
+    try {
+      return new TextDecoder().decode(await client.getObject(bucket, `${snapshotPrefix}${name}`));
+    } catch (err) {
+      throw translateS3Error(err, what);
+    }
+  };
+  const [media, observations, uploadMeta] = await Promise.all([
+    read(CANONICAL_FILE.media, 'snapshot media.csv'),
+    read(CANONICAL_FILE.observations, 'snapshot observations.csv'),
+    read(CANONICAL_FILE.uploadMeta, 'snapshot UploadMeta.json'),
   ]);
   return { media, observations, uploadMeta };
 }
