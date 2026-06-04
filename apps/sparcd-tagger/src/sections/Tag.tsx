@@ -5,6 +5,7 @@ import { useTagImages, useSpecies } from '../lib/queries';
 import { parseCollectionKey, presignImage } from '../lib/s3';
 import { SpeciesPanel } from '../components/SpeciesPanel';
 import { Cheatsheet } from '../components/Cheatsheet';
+import { SyncDialog } from '../components/SyncDialog';
 import { Overview, type PickMods, type ViewKind } from '../components/Overview';
 import { groupBursts, type BurstGrouping } from '../lib/bursts';
 import { rangeSet, toggleIndex, burstIndexSet } from '../lib/selection';
@@ -64,6 +65,7 @@ export function Tag() {
   const [capturingFor, setCapturingFor] = useState<string | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
   const [showCheatsheet, setShowCheatsheet] = useState(false);
+  const [showSync, setShowSync] = useState(false);
   const [savedAt, setSavedAt] = useState(0);
   const filterRef = useRef<HTMLInputElement>(null);
 
@@ -259,6 +261,13 @@ export function Tag() {
               {nDirty} unsaved · discard
             </button>
           )}
+          <button
+            onClick={() => setShowSync(true)}
+            className="text-[12px] font-mono border border-ink px-2.5 py-1 text-ink hover:bg-panelHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            title="Review and sync local edits to the canonical S3 files"
+          >
+            Sync…
+          </button>
         </div>
       </div>
 
@@ -300,6 +309,9 @@ export function Tag() {
       </div>
 
       {showCheatsheet && <Cheatsheet onClose={() => setShowCheatsheet(false)} />}
+      {showSync && (
+        <SyncDialog ctx={ctx} images={list} drafts={drafts} onClose={() => setShowSync(false)} />
+      )}
     </div>
   );
 

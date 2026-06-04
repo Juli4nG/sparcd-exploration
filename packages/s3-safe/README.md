@@ -13,8 +13,9 @@ touches storage imports this; application code never constructs an
    static BYO-S3 app this scope is not a security boundary — IAM and CORS are.
    The value is still useful to keep call sites deliberate and to support
    managed deployments that want narrower client-side scope.
-2. **Read methods + two append-only writers:**
+2. **Read methods + two append-only writers + one conditional replace:**
    - `listObjects(bucket, prefix?)` → `AsyncIterable<ObjectInfo>`
+   - `listCommonPrefixes(bucket, prefix, delimiter?)` → `string[]`
    - `getObject(bucket, key)` → `Uint8Array`
    - `statObject(bucket, key)` → metadata only (used for the HEAD verify path)
    - `presignedGet(bucket, key, ttlSec)` → URL
@@ -22,20 +23,44 @@ touches storage imports this; application code never constructs an
      for small atomic objects (manifests, CSVs)
    - `writeImmutableStream(bucket, key, blob, opts)` → per-file streaming
      write for image blobs; single-PUT or multipart, both conditional
-3. **No destructive APIs** — no `delete*`, `copy*`, overwriting `put*`, and
-   **no `AbortMultipartUpload`**. A failed multipart upload leaves its parts
-   in place; a **bucket lifecycle rule that aborts incomplete multipart
-   uploads after N days (recommend 7) is the only cleanup mechanism and is a
-   mandatory deployment requirement**. A `no-restricted-imports` lint rule
-   should block `@aws-sdk/client-s3` at the application layer so this wrapper
-   stays the only boundary.
+   - `replaceIfUnchanged(bucket, key, body, { etag, contentType? })` →
+     conditional `PutObject` with `IfMatch: <etag>` for the canonical Camtrap
+     metadata (`media.csv`, `observations.csv`, `UploadMeta.json`). The single
+     blessed overwrite path; a narrow compatibility exception, not a general put.
+3. **No destructive APIs** — no `delete*`, `copy*`, *unconditional* overwriting
+   `put*`, and **no `AbortMultipartUpload`**. The only overwrite is
+   `replaceIfUnchanged`, gated by `IfMatch`. A failed multipart upload leaves
+   its parts in place; a **bucket lifecycle rule that aborts incomplete
+   multipart uploads after N days (recommend 7) is the only cleanup mechanism
+   and is a mandatory deployment requirement**. A `no-restricted-imports` lint
+   rule should block `@aws-sdk/client-s3` at the application layer so this
+   wrapper stays the only boundary.
 
 ## Conditional writes
 
-Both writers send `IfNoneMatch: "*"`. On `412` they throw
+Both immutable writers send `IfNoneMatch: "*"`. On `412` they throw
 `PreconditionFailedError`; on `501`/`NotImplemented` they throw
 `ConditionalPutUnsupportedError`. Neither falls back to a HEAD-then-PUT path
 — that TOCTOU race cannot be closed safely.
+
+### `replaceIfUnchanged` (`IfMatch`) — canonical metadata sync
+
+`replaceIfUnchanged` sends `IfMatch: <etag>` against the ETag the caller
+reviewed. On `412` it throws **`ConditionalReplaceConflictError`** (the object
+changed since it was loaded — a conflict to resolve, never an overwrite); on
+`501`/`NotImplemented` it throws `ConditionalPutUnsupportedError`. It never
+retries without the precondition. This is stricter than the Java desktop app,
+which overwrites canonical files unconditionally and runs no concurrency check.
+
+**Backend enforcement (P4 deployment gate).** Canonical sync requires the target
+endpoint to enforce `IfMatch` on `PutObject` from browser S3 calls and to expose
+ETag/`HEAD` metadata via CORS. AWS S3 supports conditional writes (Aug 2024) and
+bucket-policy enforcement (Nov 2024); MinIO and R2 support conditional PUTs.
+**Live enforcement of `IfMatch` on the project's MinIO/R2 endpoint is still a P4
+deployment gate** — record the verified backend versions here once proven. If a
+backend will not enforce it, canonical sync stays disabled for that endpoint
+(the tool is local/export-only there). There is no automatic fallback to Java's
+last-writer-wins overwrite.
 
 ### `writeImmutableStream` and the multipart-complete spike (P4)
 

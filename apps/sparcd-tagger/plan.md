@@ -1128,6 +1128,139 @@ in the Dexie v1 schema, so no schema bump). The merge helpers in
 the `MediaEdit`/`ObservationInput` shapes are ready. Keep all S3 access behind
 `src/lib/s3.ts`; do not import `@aws-sdk/client-s3` in app code.
 
+### P4 — implementation report (done)
+
+Status: **complete — the first S3 write path, dry-run by default.** `pnpm check`
+(now **5** workspaces — `@sparcd/s3-safe` gained a `check`/`test` script),
+`pnpm test` (camtrap 39 + uploader 36 + s3-safe **5 new** + tagger **38**, the
+18 new being 12 sync + 6 journal), and `pnpm --filter sparcd-tagger build` all
+pass. The default Vitest suite still runs fully offline — every S3/Dexie effect
+is injected, so no test touches a real bucket. The read path still cannot write:
+`getClient` constructs a read-scoped `SafeS3Client`, and the only write-capable
+client (`getWriteClient`) is built lazily *inside* the live-write IO closures, so
+a dry-run never even constructs one.
+
+**Wrapper extension — `@sparcd/s3-safe` (`replaceIfUnchanged`).** Added the one
+reviewed conditional-overwrite method: `replaceIfUnchanged(bucket, key, body,
+{ etag, contentType? })` → `PutObject` with `IfMatch: <etag>`, returning the new
+ETag. A stale ETag (412) throws the new typed **`ConditionalReplaceConflictError`**
+(distinct from `PreconditionFailedError`, which stays the `IfNoneMatch`
+"already exists" case); a backend that won't enforce `IfMatch` (501) throws
+`ConditionalPutUnsupportedError`. **No fallback to an unconditional PUT, ever.**
+The package now has a `tsconfig.json`, `test`/`check` scripts, and
+`test/replace-if-unchanged.test.ts` (mocks the internal client's `send`): proves
+the `IfMatch` header is sent, a 412 is a typed conflict with no second attempt,
+501 → unsupported, an empty write-allowlist refuses before any network call, and
+only `PutObjectCommand`s are ever issued. README updated with the method, the
+`IfMatch` semantics, and the **backend-enforcement P4 deployment gate**.
+
+**Data path — pure + injected-IO, fully testable (`src/lib/sync.ts`,
+`syncJournal.ts`, `hash.ts`).**
+- `buildSyncPlan(images, drafts, offset)` diffs drafts against the canonical base
+  into `@sparcd/camtrap` `MediaEdit`s: classifies add / modify / remove /
+  time-correction, **ignores a draft that equals its base** (re-applying the same
+  species, or a questionable-only toggle, is not a canonical change), and splits
+  tag edits (→ `mergeObservations` + delta) from time-only edits (→ `mergeMedia`
+  only, so an untagged-but-time-shifted image never loses its observation rows).
+- `runSync(params, io)` is the orchestrator. Fresh path: re-load canonical →
+  **pre-write conflict check** (current ETag vs the grounded base, per file) →
+  build merged bodies against current (`mergeMedia`/`mergeObservations`/
+  `applyUploadMetaEdit`; only files whose bytes actually change are written, and
+  `UploadMeta.json` always changes because every successful sync appends the
+  mandatory `Edited by … on …` comment) → **dry-run returns the planned writes +
+  snapshot prefix and stops** → live: immutable snapshot (manifest last, **+1s
+  re-stamp on a 412 collision, retry once**) → journal → conditional
+  `replaceIfUnchanged` of media → observations → UploadMeta, recording each new
+  ETag → clear journal. A mid-write 412 returns a conflict (journal left for
+  resume); a 501 returns `unsupported`.
+- `syncJournal.ts` owns the per-object resume journal (each object carries its
+  `baseETag`, the exact `body`, `intendedHash`, status, newETag) and the pure
+  `planResume`: a `written` object must still hash to its intent (else another
+  writer touched a partially-synced object → conflict repair), a `pending` object
+  must still match its base ETag (else stale → conflict), otherwise continue from
+  the first pending object. The journal stores bodies so a resume after a browser
+  reload can finish without the in-memory drafts.
+- `hash.ts` is SHA-256 over Web Crypto — **no new dependency** (the cast at the
+  `crypto.subtle.digest` call is only the lib's `BufferSource` generic friction).
+- Tests: `test/sync.test.ts` (plan classification incl. detag/questionable-only/
+  time-only; dry-run writes nothing; noop; live happy path with snapshot-set +
+  manifest-last + in-order conditional replace + journal cleared; pre-write
+  conflict; **+1s snapshot re-stamp**; 501 unsupported; **resume from a journal**;
+  **reader-listing contract** — every snapshot object is a non-image under
+  `.sparcd-tagger-snapshots/`) and `test/syncJournal.test.ts` (the resume planner
+  + ETag collection).
+
+**S3 IO + Dexie grounding (`src/lib/s3.ts`, `db.ts`, `queries.ts`,
+`syncRunner.ts`).** `loadCanonicalState` loads all three files with ETag + hash;
+`makeSyncIO` wires `writeImmutable` (snapshots) and `replaceIfUnchanged`
+(canonical) behind the lazy write client. **Grounding is owned by the Tag
+workspace query**: `useTagImages` now loads `loadCanonicalState` and calls
+`groundUpload`, which records the canonical ETags/hashes into the `uploads`
+record *together with* the on-screen data — so the base and what the user edits
+never drift (a remote change that triggers a refetch re-grounds at the same
+moment). The draft store's old `uploads.put` side-effect was removed (grounding
+owns that record; `timeOffset` is preserved across re-grounds). Dexie went to
+**v2** for an additive `syncJournals` store (the `base*ETag/Hash` fields needed
+no bump as predicted, but the resume journal is a new store — a purely additive
+`version(2)` with no upgrade callback). `syncRunner.performSync` is the
+React-free glue: pull grounded base + offset + any resume journal, run, and
+re-ground on the freshly written state; on success the UI clears draft `dirty`
+(`markUploadSynced`) and invalidates the `tagImages` query.
+
+**Sync UI (`src/components/SyncDialog.tsx`, store, Tag toolbar).** A "Sync…"
+button in the Tag toolbar opens the dialog, which **previews via a forced
+dry-run** (so the preview itself writes nothing) — showing the add/change/remove/
+time-corrected counts, the planned files, and the snapshot prefix — then lets the
+user run it. The persisted **dry-run default (Settings) is on**; turning it off is
+the only way to perform the in-place replacement. The **conflict view** offers
+"Discard local & reload" (drops drafts + re-grounds) or "Keep editing"; a live
+sync requires a non-empty Tagger identity (Settings) since it stamps the snapshot
+path + edit comment. The Chrome `StatePill` is now fed real states
+(`syncing`/`dry-run`/`synced`/`conflict`/`error`), reset to `local-only` when the
+upload changes.
+
+**Open questions #1–#3 — addressed in code, with #2/#3 still live-credential
+gates.** #1 (identity): prompt-and-persist via the Settings `taggerUser`,
+required before a live sync. #2/#3 (write-allowed credentials + `IfMatch`/
+`IfNoneMatch` backend enforcement): the code sends the headers and treats
+non-enforcement as a hard `unsupported`/conflict (never a silent
+last-writer-wins downgrade), but **no live write or `IfMatch` preflight has been
+run against the target endpoint** — there are no write-capable credentials in
+this workspace. The P4 design gate (canonical sync stays disabled where `IfMatch`
+isn't enforced) is honored by the `ConditionalPutUnsupportedError` → `unsupported`
+path; proving enforcement on the project's MinIO/R2 endpoint and recording the
+versions in the `@sparcd/s3-safe` README remains the deployment gate.
+
+**Deliberate deferrals (for the P5 agent):**
+- **Conflict resolution is discard-or-cancel, not a 3-way merge UI.** The plan's
+  richer "local-vs-remote media/observation/meta diff" view is deferred; P4
+  surfaces which file changed + why and lets the user discard-and-reload or keep
+  editing (and export). The pre-write/journal conflict *detection* is complete.
+- **Time-correction UI still unbuilt** (carried from P1–P3). `buildSyncPlan`
+  already consumes `uploads.timeOffset` + `drafts.timeOverride` and emits the
+  `media.csv` col-4 / observation col-4 corrections (tested), so the offset/
+  override editors just need to write those fields.
+- **Multi-species rows.** Single label per image (the v1 Dexie schema); the merge
+  side (`MediaEdit.observations[]`) already accepts arrays.
+- **`loadObject` HEAD-then-GET** grounds ETag and bytes in two calls; a change
+  between them can only cause a spurious sync conflict (safe-fail), never a bad
+  write. A single atomic `GetObject`-with-ETag read method would remove the
+  window if it matters.
+- Live CORS / `species.json` presence / `IfMatch` enforcement remain
+  **unverified** (no credentials) — same `.env` + `pnpm --filter sparcd-tagger
+  dev` check P0–P3 flagged; additionally do a real dry-run then a real sync
+  against a write-allowed test bucket and confirm the snapshot + canonical
+  replacement land.
+
+**For the P5 agent:** snapshot/version recovery. The snapshot subtree
+(`<uploadPrefix>.sparcd-tagger-snapshots/<user>/<stamp>/` with `media.csv`,
+`observations.csv`, `UploadMeta.json`, and a `manifest.json` written last) is the
+recovery source — list prefixes, ignore any without a complete manifest, load a
+chosen snapshot into local, and restore through the same `replaceIfUnchanged`
+flow (`runSync` already grounds + journals, so a restore is "sync these bodies").
+The History/Recovery view (`src/sections/Recovery.tsx`) is the place to surface
+remote snapshots alongside the local dirty drafts it already shows.
+
 ## Open questions for before P0
 
 1. **User identity for snapshots and edit comments.** The IAM access key

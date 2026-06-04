@@ -8,7 +8,7 @@ import {
   listCollections,
   listUploads,
   listUploadImages,
-  loadCanonicalBundle,
+  loadCanonicalState,
   parseCollectionKey,
   type CollectionRef,
   type UploadRef,
@@ -16,6 +16,7 @@ import {
 } from './s3';
 import { fetchSpecies, type SpeciesResult } from './species';
 import { buildTagImages, type TagImage } from './workspace';
+import { groundUpload } from './db';
 
 export function useCollections(cfg: S3Config | null, connectionId: number) {
   return useQuery<CollectionRef[]>({
@@ -59,7 +60,9 @@ export function useUploadImages(
 }
 
 /** The canonical base for the Tag workspace: `media.csv` joined with existing
- *  `observations.csv` into per-image state. Read-only; P4 adds the write path. */
+ *  `observations.csv` into per-image state. Loading also grounds the upload —
+ *  it records the canonical ETags/hashes the sync path writes against, so the
+ *  on-screen base and the sync ground never drift apart. */
 export function useTagImages(
   cfg: S3Config | null,
   connectionId: number,
@@ -70,7 +73,12 @@ export function useTagImages(
     queryKey: ['tagImages', connectionId, collectionKey, uploadPrefix],
     queryFn: async () => {
       const { bucket } = parseCollectionKey(collectionKey!);
-      return buildTagImages(await loadCanonicalBundle(cfg!, bucket, uploadPrefix!));
+      const state = await loadCanonicalState(cfg!, bucket, uploadPrefix!);
+      await groundUpload(bucket, uploadPrefix!, state);
+      return buildTagImages({
+        mediaCsv: state.media.text,
+        observationsCsv: state.observations.text,
+      });
     },
     enabled: !!cfg && !!collectionKey && !!uploadPrefix,
     staleTime: 60 * 1000,

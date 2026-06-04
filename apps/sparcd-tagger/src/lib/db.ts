@@ -9,6 +9,8 @@
 // edit fields. They live in the v1 shape now so P4 adds no schema bump.
 
 import Dexie, { type Table } from 'dexie';
+import type { CanonicalState } from './sync';
+import type { SyncJournal } from './syncJournal';
 
 /** One image's local edit. `id` = `${bucket}::${uploadPrefix}::${mediaPath}`.
  *  `label` is the applied species `scientificName` **or** a non-animal label
@@ -84,6 +86,7 @@ class TaggerDb extends Dexie {
   drafts!: Table<DraftRecord, string>;
   uploads!: Table<UploadRecord, string>;
   sessions!: Table<SessionRecord, string>;
+  syncJournals!: Table<SyncJournal, string>;
 
   constructor() {
     super('sparcd-tagger');
@@ -94,6 +97,10 @@ class TaggerDb extends Dexie {
       uploads: 'id',
       sessions: 'sessionId, syncedAt',
     });
+    // v2 adds the P4 per-object sync journal (resume-after-partial-write). A
+    // purely additive store needs no upgrade callback; v1 drafts carry forward
+    // untouched. Keyed `${bucket}::${uploadPrefix}` (= the journal's own `id`).
+    this.version(2).stores({ syncJournals: 'id' });
   }
 }
 
@@ -125,4 +132,53 @@ export async function putDraft(record: DraftRecord): Promise<void> {
 /** Drop every local draft for one upload (the per-upload "Discard local changes"). */
 export async function discardUploadDrafts(bucket: string, uploadPrefix: string): Promise<void> {
   await db.drafts.where('[bucket+uploadPrefix]').equals([bucket, uploadPrefix]).delete();
+}
+
+// --- P4 grounding + sync journal -------------------------------------------
+
+/**
+ * Record the canonical ETags/hashes the workspace just loaded as this upload's
+ * sync ground. Called from the Tag workspace query so the base and the on-screen
+ * data stay in lockstep: a remote change that triggers a refetch re-grounds at
+ * the same time, and any existing `timeOffset` is preserved.
+ */
+export async function groundUpload(
+  bucket: string,
+  uploadPrefix: string,
+  base: CanonicalState,
+): Promise<void> {
+  const id = uploadId(bucket, uploadPrefix);
+  const existing = await db.uploads.get(id);
+  await db.uploads.put({
+    id,
+    bucket,
+    uploadPrefix,
+    loadedAt: new Date().toISOString(),
+    timeOffset: existing?.timeOffset ?? null,
+    mediaETag: base.media.etag,
+    mediaHash: base.media.hash,
+    observationsETag: base.observations.etag,
+    observationsHash: base.observations.hash,
+    uploadMetaETag: base.uploadMeta.etag,
+    uploadMetaHash: base.uploadMeta.hash,
+  });
+}
+
+export function getUpload(bucket: string, uploadPrefix: string): Promise<UploadRecord | undefined> {
+  return db.uploads.get(uploadId(bucket, uploadPrefix));
+}
+
+export function loadSyncJournal(
+  bucket: string,
+  uploadPrefix: string,
+): Promise<SyncJournal | undefined> {
+  return db.syncJournals.get(uploadId(bucket, uploadPrefix));
+}
+
+export async function saveSyncJournal(journal: SyncJournal): Promise<void> {
+  await db.syncJournals.put(journal);
+}
+
+export async function clearSyncJournal(bucket: string, uploadPrefix: string): Promise<void> {
+  await db.syncJournals.delete(uploadId(bucket, uploadPrefix));
 }

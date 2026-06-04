@@ -32,7 +32,8 @@ export function Settings() {
           spellCheck={false}
         />
         <p className="mt-1.5 text-[13px] text-inkMute font-body">
-          Stamps audit-snapshot paths and the mandatory edit comment on every sync (P4).
+          Stamps the audit-snapshot path and the mandatory edit comment on every sync. Required
+          before a live sync can run.
         </p>
       </section>
 
@@ -48,7 +49,8 @@ export function Settings() {
           Dry-run (log writes, change nothing)
         </label>
         <p className="mt-1.5 text-[13px] text-inkMute font-body">
-          On by default. The S3 write path does not exist until P4; this is the safety default it will honor.
+          On by default. While on, Sync previews the canonical writes and a snapshot but changes
+          nothing. Turn it off to perform the conditional in-place replacement.
         </p>
       </section>
 

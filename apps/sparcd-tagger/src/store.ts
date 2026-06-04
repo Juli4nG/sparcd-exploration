@@ -38,6 +38,7 @@ type TaggerState = {
   toggleTheme: () => void;
   selectCollection: (key: string | null) => void;
   selectUpload: (prefix: string | null) => void;
+  setSyncState: (state: SyncState) => void;
   setTaggerUser: (value: string) => void;
   setDryRun: (value: boolean) => void;
   setBurstThreshold: (value: number) => void;
@@ -76,8 +77,11 @@ export const useStore = create<TaggerState>((set) => ({
   },
   setSection: (section) => set({ section }),
   toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
-  selectCollection: (key) => set({ selectedCollectionKey: key, selectedUploadPrefix: null }),
-  selectUpload: (prefix) => set({ selectedUploadPrefix: prefix, section: prefix ? 'tag' : 'browse' }),
+  selectCollection: (key) =>
+    set({ selectedCollectionKey: key, selectedUploadPrefix: null, syncState: 'local-only' }),
+  selectUpload: (prefix) =>
+    set({ selectedUploadPrefix: prefix, section: prefix ? 'tag' : 'browse', syncState: 'local-only' }),
+  setSyncState: (state) => set({ syncState: state }),
   setTaggerUser: (value) => set({ taggerUser: value }),
   setDryRun: (value) => set({ dryRun: value }),
   setBurstThreshold: (value) => set({ burstThresholdSec: value }),

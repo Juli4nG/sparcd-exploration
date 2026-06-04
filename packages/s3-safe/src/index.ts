@@ -5,11 +5,15 @@
 //      Reads check the read allowlist; writes check a *separate*, opt-in
 //      write allowlist that is empty by default. A bucket must be explicitly
 //      granted before any byte can be written to it.
-//   2. Read methods only, plus two append-only writers: `writeImmutable`
-//      (small atomic objects) and `writeImmutableStream` (per-file streaming).
-//   3. No destructive APIs — no delete*, copy*, overwriting put*, and no
-//      AbortMultipartUpload. Orphan multipart parts are reaped by a bucket
-//      lifecycle rule, never by this wrapper (see ../README.md).
+//   2. Read methods only, plus two append-only writers — `writeImmutable`
+//      (small atomic objects) and `writeImmutableStream` (per-file streaming) —
+//      and one reviewed conditional replacement, `replaceIfUnchanged`, for the
+//      canonical Camtrap metadata files the tagger must update in place.
+//   3. No destructive APIs — no delete*, copy*, AbortMultipartUpload, and no
+//      *unconditional* overwriting put*. The single overwrite path
+//      (`replaceIfUnchanged`) is gated by `IfMatch` and treats a stale ETag as a
+//      conflict, never an overwrite. Orphan multipart parts are reaped by a
+//      bucket lifecycle rule, never by this wrapper (see ../README.md).
 //
 // `writeImmutableStream` (the uploader's P4 streaming writer) does its own
 // multipart orchestration rather than going through `@aws-sdk/lib-storage`'s
@@ -90,6 +94,20 @@ export class PreconditionFailedError extends Error {
   }
 }
 
+/**
+ * Thrown by `replaceIfUnchanged` when the object changed since the caller
+ * loaded it — the `IfMatch` ETag no longer matches (412). This is a *conflict*,
+ * never an automatic overwrite: the caller must reload, re-review, and retry.
+ * Distinct from `PreconditionFailedError` (which means "already exists" on an
+ * `IfNoneMatch` immutable write) so callers can branch on the two conditions.
+ */
+export class ConditionalReplaceConflictError extends Error {
+  constructor(key: string) {
+    super(`Object at "${key}" changed since it was loaded (ETag mismatch)`);
+    this.name = 'ConditionalReplaceConflictError';
+  }
+}
+
 function endpointUrl(cfg: S3Config): string {
   if (/^https?:\/\//i.test(cfg.endpoint)) return cfg.endpoint;
   const scheme = cfg.secure === false ? 'http' : 'https';
@@ -122,6 +140,18 @@ function translateWriteError(err: unknown, key: string): Error {
   const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
   const status = e.$metadata?.httpStatusCode;
   if (status === 412 || e.name === 'PreconditionFailed') return new PreconditionFailedError(key);
+  if (status === 501 || e.name === 'NotImplemented') return new ConditionalPutUnsupportedError();
+  return err as Error;
+}
+
+// `replaceIfUnchanged` shares the 501 (backend won't enforce the precondition)
+// translation, but a 412 here means the reviewed ETag is stale — a conflict, not
+// an "already exists". The wrapper never retries without the `IfMatch` header.
+function translateReplaceError(err: unknown, key: string): Error {
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  const status = e.$metadata?.httpStatusCode;
+  if (status === 412 || e.name === 'PreconditionFailed')
+    return new ConditionalReplaceConflictError(key);
   if (status === 501 || e.name === 'NotImplemented') return new ConditionalPutUnsupportedError();
   return err as Error;
 }
@@ -309,6 +339,44 @@ export class SafeS3Client {
       );
     } catch (err) {
       throw translateWriteError(err, key);
+    }
+  }
+
+  /**
+   * Conditional replacement for the canonical Camtrap metadata files
+   * (`media.csv`, `observations.csv`, `UploadMeta.json`). A `PutObject` carrying
+   * `IfMatch: <etag>` against the ETag the caller reviewed — the only blessed
+   * overwrite path in the wrapper, and a narrow compatibility exception, not a
+   * general put.
+   *
+   * If the remote object changed since that ETag was read, the backend returns
+   * 412 and this throws `ConditionalReplaceConflictError`. The wrapper never
+   * falls back to an unconditional PUT — a stale ETag is always a conflict for
+   * the caller to resolve. A backend that won't enforce `IfMatch` (501) throws
+   * `ConditionalPutUnsupportedError`; canonical sync must stay disabled there
+   * rather than silently degrade to last-writer-wins. Returns the new ETag.
+   */
+  async replaceIfUnchanged(
+    bucket: string,
+    key: string,
+    body: Uint8Array | string,
+    opts: { etag: string; contentType?: string; metadata?: Record<string, string> },
+  ): Promise<{ etag?: string }> {
+    this.assertWritable(bucket);
+    try {
+      const res = await this.client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: body,
+          IfMatch: opts.etag,
+          ContentType: opts.contentType,
+          Metadata: opts.metadata,
+        }),
+      );
+      return { etag: res.ETag };
+    } catch (err) {
+      throw translateReplaceError(err, key);
     }
   }
 

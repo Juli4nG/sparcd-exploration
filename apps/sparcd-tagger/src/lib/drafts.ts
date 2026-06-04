@@ -8,14 +8,7 @@
 // editing one image never re-renders the whole strip.
 
 import { create } from 'zustand';
-import {
-  db,
-  draftId,
-  loadDraftsForUpload,
-  discardUploadDrafts,
-  uploadId,
-  type DraftRecord,
-} from './db';
+import { db, draftId, loadDraftsForUpload, discardUploadDrafts, uploadId, type DraftRecord } from './db';
 
 /** The built-in non-animal label. Encoded as a species row (`Casper`, count ≥1)
  *  so it counts as species-present exactly like Java treats it (P0 decision). */
@@ -55,6 +48,8 @@ type DraftState = {
   /** Flush every pending debounced Dexie write now (manual Cmd/Ctrl+S confirm). */
   flushSaves: () => Promise<void>;
   discardUpload: (ctx: UploadCtx) => Promise<void>;
+  /** Clear `dirty` on every draft after a successful sync (they now match the new base). */
+  markUploadSynced: (ctx: UploadCtx) => Promise<void>;
 };
 
 // Per-record debounce so a burst of keystrokes coalesces into one Dexie write.
@@ -144,14 +139,9 @@ export const useDraftStore = create<DraftState>((set, get) => {
       if (get().loadedKey !== key) return;
       const map: Record<string, DraftRecord> = {};
       for (const r of rows) map[r.mediaPath] = r;
-      // Record the session's upload row (loadedAt) for the eventual P4 grounding.
-      void db.uploads.put({
-        id: key,
-        bucket: ctx.bucket,
-        uploadPrefix: ctx.uploadPrefix,
-        loadedAt: new Date().toISOString(),
-        timeOffset: null,
-      });
+      // The `uploads` record (loadedAt + base ETags/hashes) is owned by the
+      // workspace grounding step (`groundUpload`), so the base and the on-screen
+      // data are written together; the draft store no longer touches it.
       set({ loading: false, drafts: map });
     },
 
@@ -193,6 +183,24 @@ export const useDraftStore = create<DraftState>((set, get) => {
     discardUpload: async (ctx) => {
       await discardUploadDrafts(ctx.bucket, ctx.uploadPrefix);
       if (get().loadedKey === uploadId(ctx.bucket, ctx.uploadPrefix)) set({ drafts: {} });
+    },
+
+    markUploadSynced: async (ctx) => {
+      void ctx;
+      // Drop any debounced writes — we are about to rewrite the touched records.
+      for (const [, timer] of pending) clearTimeout(timer);
+      pending.clear();
+      const next: Record<string, DraftRecord> = {};
+      const changed: DraftRecord[] = [];
+      for (const [path, rec] of Object.entries(get().drafts)) {
+        if (rec.dirty) {
+          const clean = { ...rec, dirty: false };
+          next[path] = clean;
+          changed.push(clean);
+        } else next[path] = rec;
+      }
+      set({ drafts: next });
+      if (changed.length) await db.drafts.bulkPut(changed);
     },
   };
 });

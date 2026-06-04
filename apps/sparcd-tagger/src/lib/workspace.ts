@@ -11,7 +11,12 @@ import {
   requestedSpeciesFromComments,
   type Observation,
 } from '@sparcd/camtrap';
-import type { CanonicalBundle } from './s3';
+
+/** The canonical CSV text `buildTagImages` reads (the sync path adds ETags/hashes). */
+export type CanonicalBundle = {
+  mediaCsv: string;
+  observationsCsv: string;
+};
 
 /** One image as the Tag workspace sees it before any local edit. */
 export type TagImage = {
