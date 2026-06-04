@@ -196,6 +196,13 @@ This is stricter than the Java desktop app, which writes with unconditional
 tagger-vs-tagger and tagger-vs-uploader/static-tool writes; it cannot prevent a
 concurrent or later Java save from overwriting canonical tagger output.
 
+**P4 design gate.** Do not silently downgrade to Java's last-writer-wins write
+behavior. If the target endpoint does not enforce `IfMatch` from browser S3
+calls, canonical sync stays disabled for that endpoint and the tool remains
+local-only/export-only until the backend/policy is fixed. A deliberately unsafe
+Java-compatible overwrite mode would be a separate, operator-approved feature,
+not P4 fallback behavior.
+
 Endpoint config is the same shape for all three backends:
 
 ```ts
@@ -330,6 +337,12 @@ unrelated row that must survive every merge unchanged.
   `media.csv` col 4 because Java and `sparcd-web` decorate displayed image
   timestamps from media rows. Observation col 4 is also updated for edited
   observation rows, but it is not enough by itself.
+- **Reader listing contract.** Adding tagger snapshot folders under an upload
+  prefix must not add visible images. The current `sparcd-web`
+  `get_s3_images` recurses subfolders but only returns `.jpg` and `.mp4`
+  objects, so snapshot prefixes must contain only CSV/JSON/manifest files and
+  tests/verification must prove the image list is unchanged before and after a
+  snapshot subtree exists.
 - **UploadMeta contract.** `imagesWithSpecies` follows the Java save delta:
   `prior - detaggedCount + retaggedCount`, where detagged means "was tagged,
   now species-present is empty" and retagged means "was untagged, now
@@ -345,6 +358,13 @@ unrelated row that must survive every merge unchanged.
 - **No accidental data loss.** Retag/detag tests prove the merge only replaces
   rows for edited media IDs and never drops unrelated observations,
   deployments, or media rows.
+- **Partial-sync resume contract.** Simulate failures after `media.csv` and
+  after `observations.csv`. Retry must verify already-written objects by hash,
+  continue from the first pending object, and conflict if any written or pending
+  object changed remotely.
+- **Snapshot collision contract.** Simulate a 412 on the immutable snapshot
+  prefix. The tagger bumps the snapshot stamp by +1s, retries once, writes
+  `manifest.json` last, and recovery ignores prefixes without a manifest.
 - **Wrapper safety.** Unit tests cover the future `replaceIfUnchanged`
   behavior with mocked S3 responses: success on matching ETag, conflict on
   stale ETag, no fallback overwrite, no delete/copy command.
@@ -526,7 +546,15 @@ different model (server-issued token); we don't share UI with them by design
     and is required for re-tagging compatibility; it is not an object delete.
   - Write immutable audit snapshots of the pre-change canonical files under
     `<uploadPrefix>/.sparcd-tagger-snapshots/<userId>/<ISO>/` using
-    `writeImmutable`. These snapshots are for recovery only.
+    `writeImmutable`. These snapshots are for recovery only. Snapshot prefixes
+    contain only non-image files (`media.csv`, `observations.csv`,
+    `UploadMeta.json`, `manifest.json`) so recursive image readers do not
+    surface them.
+  - Snapshot `manifest.json` is written last. If `writeImmutable` returns 412
+    for a snapshot key, bump the snapshot stamp by +1s, rebuild the snapshot
+    prefix, and retry once, matching the uploader's re-stamp pattern. Recovery
+    only lists snapshot prefixes with a complete manifest; partial prefixes are
+    ignored unless an operator inspects them manually.
 - Write:
   - `replaceIfUnchanged(bucket, "<uploadPrefix>/media.csv", serialized, { etag: baseMediaETag })`
   - `replaceIfUnchanged(bucket, "<uploadPrefix>/observations.csv", serialized, { etag: baseObservationsETag })`
@@ -545,6 +573,20 @@ different model (server-issued token); we don't share UI with them by design
     retries. If the observations write fails after `media.csv`, readers may
     show corrected capture time before species changes. The recovery view must
     detect and repair either partial-sync state.
+  - Persist a per-object sync journal before the first canonical write:
+    object key, base ETag, intended SHA-256, status (`pending` / `written`),
+    and new ETag when available. On failure after any canonical PUT, retry is a
+    resume, not a blind whole-sync retry:
+    1. Re-HEAD/load the three canonical objects.
+    2. For objects marked `written`, require the remote hash to equal the
+       intended hash; otherwise enter conflict repair because another writer
+       changed a partially synced object.
+    3. For remaining `pending` objects, require the remote ETag/hash to still
+       match the stored base before writing with that current ETag.
+    4. Continue from the first pending object forward (`media.csv` →
+       `observations.csv` → `UploadMeta.json`), recording each new ETag.
+    5. When all three objects are verified/written, clear the journal and mark
+       the draft synced.
   - On a conditional conflict, do not retry blind. Reload, show conflict UI,
     and require an explicit merge.
   - Records `syncedAt`, new ETags, and hashes in Dexie.
@@ -691,7 +733,7 @@ button is one keystroke.
 | **P1** | Single-image tag editing; Dexie drafts; J/K nav; species autocomplete | None |
 | **P2** | Sequence/burst grouping; full keyboard set; cheatsheet modal | None |
 | **P3** | Batch tagging (multi-select); recovery view (local-only at this stage) | None |
-| **P4** | Compatibility sync: immutable pre-write snapshots plus conditional canonical replacement of `<uploadPrefix>/media.csv`, `<uploadPrefix>/observations.csv`, and `<uploadPrefix>/UploadMeta.json`; only after manual review of `replaceIfUnchanged`, mocked wrapper tests, fixture-backed merge tests, and endpoint-specific CORS/PUT preflight | First writes, dry-run by default |
+| **P4** | Compatibility sync: immutable pre-write snapshots plus conditional canonical replacement of `<uploadPrefix>/media.csv`, `<uploadPrefix>/observations.csv`, and `<uploadPrefix>/UploadMeta.json`; explicit per-object resume journal for partial three-file writes; snapshot-prefix +1s re-stamp on 412; verified that `.sparcd-tagger-snapshots/` does not change the reader image list; only after manual review of `replaceIfUnchanged`, mocked wrapper tests, fixture-backed merge tests, and endpoint-specific CORS/PUT preflight | First writes, dry-run by default |
 | **P5** | Snapshot/version recovery: load prior snapshots into local, restore through the same conditional canonical replacement flow | Same as P4 only on restore |
 | **P6** | Internal navigation sections beyond the tagging core: Browse, History (surfaces the P5 recovery capability), Settings | Reads only |
 
@@ -723,8 +765,10 @@ reviewed in isolation before any real bucket is at risk.
    during P4 sync. Append-only files are audit snapshots only.
 5. **Conditional replacement backend support.** Verify the target MinIO/R2/S3
    endpoints enforce `IfMatch` on `PutObject` from browser SDK calls and expose
-   enough `HEAD` metadata/ETag via CORS. If a backend cannot enforce this, P4
-   cannot safely write canonical metadata from a static app.
+   enough `HEAD` metadata/ETag via CORS. This is a P4 go/no-go gate: if a
+   backend cannot enforce this, P4 does not write canonical metadata on that
+   backend. The plan does not allow an automatic fallback to Java's
+   unconditional overwrite behavior.
 6. **Ghost/Casper counting semantics.** Compatibility default is that
    Ghost/Casper counts as species-present because Java treats any non-empty
    `speciesPresent` as tagged. Confirm before P0 that this is the intended
