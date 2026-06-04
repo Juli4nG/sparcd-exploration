@@ -1,0 +1,82 @@
+// Sequence/burst grouping. The plan's heuristic: same deployment + capture
+// times within a configurable window (default 60s, slider 5–600s) → one burst.
+// Bursts render as visual bands in the image strip and are the unit of
+// whole-burst selection and the "apply to whole burst" keystroke.
+//
+// The grouping walks `media.csv` order (the authoritative image order the Tag
+// workspace grounds on) and starts a new burst whenever the deployment changes
+// or the gap to the previous image exceeds the threshold. It groups on the
+// base capture timestamp; a uniform upload offset shifts every image equally
+// and so never changes a gap, and per-image overrides are rare — when the time
+// correction UI lands it can pass corrected timestamps here without changing
+// the contract.
+
+import type { TagImage } from './workspace';
+
+export type Burst = {
+  id: number; // 0-based, in strip order
+  start: number; // first image index (inclusive)
+  end: number; // last image index (inclusive)
+  size: number;
+  deploymentId: string;
+  startTs: string; // first image timestamp, '' when unknown
+  endTs: string; // last image timestamp, '' when unknown
+};
+
+export type BurstGrouping = {
+  bursts: Burst[];
+  burstOf: number[]; // image index → burst id (same length as the image list)
+};
+
+// Naive `YYYY-MM-DDTHH:mm:ss` → epoch seconds. Parsed as UTC so the value is
+// deterministic regardless of the machine's zone; only the gap matters, and a
+// constant zone offset cancels out. Returns null when the field is unparseable.
+const TS_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/;
+
+function epoch(iso: string): number | null {
+  const m = TS_RE.exec(iso);
+  if (!m) return null;
+  return (
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])) /
+    1000
+  );
+}
+
+export function groupBursts(images: TagImage[], thresholdSec: number): BurstGrouping {
+  const bursts: Burst[] = [];
+  const burstOf = new Array<number>(images.length);
+
+  let cur: Burst | null = null;
+  let prevEpoch: number | null = null;
+
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const ts = epoch(img.baseTimestamp);
+    const sameDeployment = cur !== null && cur.deploymentId === img.deploymentId;
+    // A missing timestamp can't be proven within the window, so it always breaks
+    // the run — an unknown gap is treated as "not the same burst".
+    const withinWindow =
+      sameDeployment && ts !== null && prevEpoch !== null && Math.abs(ts - prevEpoch) <= thresholdSec;
+
+    if (cur && withinWindow) {
+      cur.end = i;
+      cur.size++;
+      cur.endTs = img.baseTimestamp;
+    } else {
+      cur = {
+        id: bursts.length,
+        start: i,
+        end: i,
+        size: 1,
+        deploymentId: img.deploymentId,
+        startTs: img.baseTimestamp,
+        endTs: img.baseTimestamp,
+      };
+      bursts.push(cur);
+    }
+    burstOf[i] = cur.id;
+    prevEpoch = ts;
+  }
+
+  return { bursts, burstOf };
+}

@@ -24,6 +24,7 @@ export type SpeciesPanelProps = {
   onClearKey: (scientificName: string) => void;
   recent: string[]; // scientificNames, most-recent first
   currentLabel: string; // applied label on the focused image, for highlight
+  selectionCount: number; // >0 → applying a species hits the whole selection
   disabled: boolean; // no image focused
 };
 
@@ -61,6 +62,11 @@ export function SpeciesPanel(props: SpeciesPanelProps) {
 
   return (
     <div className="h-full flex flex-col border-l border-rule bg-panel min-h-0">
+      {props.selectionCount > 1 && (
+        <div className="px-3 py-1.5 bg-mark border-b border-rule text-[12px] font-mono text-accent">
+          Applying to {props.selectionCount} selected images
+        </div>
+      )}
       <div className="p-3 border-b border-rule space-y-3">
         <input
           ref={props.filterRef}

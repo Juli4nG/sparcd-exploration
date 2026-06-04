@@ -956,6 +956,86 @@ and override-wins resolution. Data-shape contracts remain in `@sparcd/camtrap`.
   `pnpm --filter sparcd-tagger dev` to confirm the read path against the live
   endpoint, then eyeball the Tag workspace end-to-end.
 
+### P2 — implementation report (done)
+
+Status: **complete, local-only.** `pnpm --filter sparcd-tagger check` (tsc),
+`pnpm test` (camtrap 39 + uploader 36 + **tagger 15**, the 6 new being burst
+grouping), and `pnpm --filter sparcd-tagger build` all pass. Still nothing
+writes to S3 — the draft store only mutates Dexie/Zustand. No new deps
+(`react-hotkeys-hook` stays unused — see P1's note; the single ref-backed
+`window` handler now carries the full keyboard set).
+
+**Burst grouping (`src/lib/bursts.ts`, `test/bursts.test.ts`).** `groupBursts`
+walks `media.csv` order (the authoritative order the workspace already grounds
+on) and starts a new burst when the deployment changes or the gap to the
+previous image exceeds the threshold. It groups on the **base capture
+timestamp**: a uniform upload offset shifts every image equally so it never
+changes a gap, and per-image overrides are rare — when the time-correction UI
+lands it can pass corrected timestamps without changing the contract. Gaps use
+`Math.abs`, so out-of-order rows still group when close; a missing timestamp
+always breaks the run (an unknown gap is "not the same burst"). Returns
+`{ bursts, burstOf }` (burst list + index→burstId map). Threshold is the
+existing per-session `burstThresholdSec` (5–600s slider in Settings).
+
+**Visual bands + selection (`src/sections/Tag.tsx`).** The image strip now
+renders one sticky **burst band** header per burst (`Burst N · M img ·
+HH:MM:SS–HH:MM:SS`) above its rows, each with a "select" affordance. A
+`Set<number>` of image indices is the selection; empty means "operate on the
+focused image", non-empty means operations hit the whole selection. Clicking a
+row sets focus and clears selection (single-select); the general
+range/additive multi-select and the grid/list Overview view modes are **P3**.
+Selection highlight currently re-renders the strip on selection change — fine
+for the Educational Test collection; the plan's index-range optimization to
+avoid re-rendering thousands of cells is a **P3 perf task** alongside
+virtualization (still not added).
+
+**Full keyboard set (the P2 mandate).** Added to the global handler on top of
+P1's `J/K`/arrows/`Space`/`Enter`/`X`/`G`/assigned-keys: **`Shift+J`/`Shift+K`**
+jump focus to the next/prev burst (clearing selection); **`Cmd/Ctrl+A`** selects
+the burst containing focus (the "apply to whole burst is one keystroke" path —
+then a species key applies to all); **`Cmd/Ctrl+S`** flushes pending debounced
+Dexie writes immediately and flashes a transient "saved ✓"; **`Esc`** clears the
+selection (or blurs the filter while typing); **`?`** toggles the cheatsheet.
+Plain `J`/`K` also clear selection so single-image nav is unambiguous. Species
+keys, `G`, and `X` now operate over the selection when one exists. `X` anchors
+its new questionable value on the focused image so a mixed selection resolves
+predictably.
+
+**Batch draft mutations (`src/lib/drafts.ts`).** `applyTagMany` / `detagMany` /
+`setQuestionableMany` apply one patch to many targets in a **single** Zustand
+`set` (one re-render of changed rows, not N sequential mutations), each
+scheduling its own debounced Dexie write; the single-image methods now delegate
+to the shared `mutateMany`/`tagPatch`. `flushSaves` clears the pending timers
+and `bulkPut`s the current records (the manual `Cmd/Ctrl+S` confirm). New
+`TagTarget` type = `{ mediaPath, deploymentId }`.
+
+**Cheatsheet modal (`src/components/Cheatsheet.tsx`).** A passive reference card
+grouped Navigate / Tag / Select & save, mirroring the plan's shortcut table.
+Toggled by `?`, dismissed by `?` again, `Esc`, the × button, or a backdrop
+click; while open the global handler swallows every other key. The top-bar
+cheatsheet button described in the layout note is **not** added — the modal is
+Tag-scoped and Chrome is shared chrome; `?` is the entry point for now.
+
+**Deliberate deferrals (for the P3+ agent):**
+- **Multi-select beyond whole-burst.** Shift-range and Cmd/Ctrl-click additive
+  selection across the grid, and the segmented grid/list Overview view modes,
+  are **P3**. The selection model (`Set<number>` + batch store methods) is the
+  seam P3 extends; whole-burst is the only selection gesture wired in P2.
+- **Index-range selection + virtualization.** Selection is a plain index set
+  and the strip renders every row; the perf contract's index-range selection
+  and `@tanstack/react-virtual` grid are P3 (5,000-image @60fps target).
+- **Time-correction UI still unbuilt** (carried from P1). Burst grouping uses
+  base timestamps; it will transparently pick up corrected times once the
+  offset/override editors exist and feed `groupBursts`.
+- Live CORS / `species.json` presence remains **unverified** (no credentials in
+  this workspace) — same `.env` + `pnpm --filter sparcd-tagger dev` check P0/P1
+  flagged.
+
+**For the P3 agent:** burst bands and the batch store methods are the
+foundation for full multi-select — extend the `Set<number>` selection with
+range/additive gestures and route `applyTagMany`/`detagMany` through them. The
+recovery view (local-only at P3) reads `listDirtyDrafts` from `src/lib/db.ts`.
+
 ## Open questions for before P0
 
 1. **User identity for snapshots and edit comments.** The IAM access key

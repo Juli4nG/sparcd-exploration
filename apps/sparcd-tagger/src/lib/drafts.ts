@@ -23,6 +23,9 @@ export const GHOST = { label: 'Casper', commonName: 'Ghost' } as const;
 
 export type UploadCtx = { bucket: string; uploadPrefix: string };
 
+/** One image a batch operation targets: its media path + deployment. */
+export type TagTarget = { mediaPath: string; deploymentId: string };
+
 /** The tag a UI action applies to an image. */
 export type AppliedTag = {
   label: string; // scientificName or '' to detag
@@ -41,6 +44,16 @@ type DraftState = {
   applyTag: (ctx: UploadCtx, mediaPath: string, deploymentId: string, tag: AppliedTag) => void;
   detag: (ctx: UploadCtx, mediaPath: string, deploymentId: string) => void;
   toggleQuestionable: (ctx: UploadCtx, mediaPath: string, deploymentId: string) => void;
+
+  // Batch variants for whole-burst / multi-select: one state update + one Dexie
+  // write per target, so applying to a 2,000-image burst is a single re-render
+  // of the changed rows, not 2,000 sequential store mutations.
+  applyTagMany: (ctx: UploadCtx, targets: TagTarget[], tag: AppliedTag) => void;
+  detagMany: (ctx: UploadCtx, targets: TagTarget[]) => void;
+  setQuestionableMany: (ctx: UploadCtx, targets: TagTarget[], value: boolean) => void;
+
+  /** Flush every pending debounced Dexie write now (manual Cmd/Ctrl+S confirm). */
+  flushSaves: () => Promise<void>;
   discardUpload: (ctx: UploadCtx) => Promise<void>;
 };
 
@@ -80,24 +93,42 @@ function blankDraft(ctx: UploadCtx, mediaPath: string, deploymentId: string): Dr
 }
 
 export const useDraftStore = create<DraftState>((set, get) => {
-  /** Apply a patch to one image's record and write through, returning new map. */
+  /** Apply the same patch to one or more images in a single state update,
+   *  scheduling a debounced Dexie write per touched record. */
+  const mutateMany = (ctx: UploadCtx, targets: TagTarget[], patch: Partial<DraftRecord>): void => {
+    if (!targets.length) return;
+    const now = new Date().toISOString();
+    const updates: Record<string, DraftRecord> = {};
+    const cur = get().drafts;
+    for (const { mediaPath, deploymentId } of targets) {
+      const prev = cur[mediaPath] ?? blankDraft(ctx, mediaPath, deploymentId);
+      const next: DraftRecord = {
+        ...prev,
+        deploymentId: deploymentId || prev.deploymentId,
+        ...patch,
+        lastEdited: now,
+        dirty: true,
+      };
+      updates[mediaPath] = next;
+      scheduleSave(next);
+    }
+    set((s) => ({ drafts: { ...s.drafts, ...updates } }));
+  };
+
   const mutate = (
     ctx: UploadCtx,
     mediaPath: string,
     deploymentId: string,
     patch: Partial<DraftRecord>,
-  ): void => {
-    const prev = get().drafts[mediaPath] ?? blankDraft(ctx, mediaPath, deploymentId);
-    const next: DraftRecord = {
-      ...prev,
-      deploymentId: deploymentId || prev.deploymentId,
-      ...patch,
-      lastEdited: new Date().toISOString(),
-      dirty: true,
-    };
-    set((s) => ({ drafts: { ...s.drafts, [mediaPath]: next } }));
-    scheduleSave(next);
-  };
+  ): void => mutateMany(ctx, [{ mediaPath, deploymentId }], patch);
+
+  const tagPatch = (tag: AppliedTag): Partial<DraftRecord> => ({
+    label: tag.label,
+    commonName: tag.commonName,
+    count: tag.label ? Math.max(1, tag.count) : 0,
+    requestedSpecies: tag.requestedSpecies ?? '',
+    freeTags: tag.freeTags ?? '',
+  });
 
   return {
     loadedKey: null,
@@ -125,13 +156,7 @@ export const useDraftStore = create<DraftState>((set, get) => {
     },
 
     applyTag: (ctx, mediaPath, deploymentId, tag) =>
-      mutate(ctx, mediaPath, deploymentId, {
-        label: tag.label,
-        commonName: tag.commonName,
-        count: tag.label ? Math.max(1, tag.count) : 0,
-        requestedSpecies: tag.requestedSpecies ?? '',
-        freeTags: tag.freeTags ?? '',
-      }),
+      mutate(ctx, mediaPath, deploymentId, tagPatch(tag)),
 
     detag: (ctx, mediaPath, deploymentId) =>
       mutate(ctx, mediaPath, deploymentId, {
@@ -144,6 +169,25 @@ export const useDraftStore = create<DraftState>((set, get) => {
     toggleQuestionable: (ctx, mediaPath, deploymentId) => {
       const prev = get().drafts[mediaPath];
       mutate(ctx, mediaPath, deploymentId, { questionable: !prev?.questionable });
+    },
+
+    applyTagMany: (ctx, targets, tag) => mutateMany(ctx, targets, tagPatch(tag)),
+
+    detagMany: (ctx, targets) =>
+      mutateMany(ctx, targets, { label: '', commonName: '', count: 0, requestedSpecies: '' }),
+
+    setQuestionableMany: (ctx, targets, value) =>
+      mutateMany(ctx, targets, { questionable: value }),
+
+    flushSaves: async () => {
+      const records: DraftRecord[] = [];
+      for (const [id, timer] of pending) {
+        clearTimeout(timer);
+        const rec = Object.values(get().drafts).find((d) => d.id === id);
+        if (rec) records.push(rec);
+      }
+      pending.clear();
+      if (records.length) await db.drafts.bulkPut(records);
     },
 
     discardUpload: async (ctx) => {
