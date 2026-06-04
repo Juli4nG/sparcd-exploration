@@ -2,13 +2,47 @@
 
 A static, browser-based tagging interface for SPARC'd camera-trap images.
 Tags persist locally in IndexedDB and sync to S3-compatible storage as
-immutable, timestamped Camtrap-DP CSV files under each upload prefix.
+canonical Camtrap-DP metadata updates under each upload prefix.
 
-Sits alongside SPARC'd; reads the same MinIO/R2/S3 buckets the Java and
-Next.js apps read, and produces the same row/column `observations.csv`
-shape they ingest. It does **not** overwrite the canonical upload-level
-`observations.csv`; it writes append-only versions that a later importer,
-review step, or updated reader can merge into canonical data.
+Sits alongside SPARC'd; reads the same MinIO/R2/S3 buckets the upstream
+readers use, and produces the same row/column `observations.csv` shape (the
+verified v016 20-column layout — see Camtrap-DP encoding). It is a
+replacement/add-on for the taggers in
+[`sparcd-web`](https://github.com/culverlab/sparcd-web) and the
+[`sparcd`](https://github.com/culverlab/sparcd) Java app. Compatibility is
+the primary contract: a user can tag an image in this tool, open and re-tag
+that same image in the Java app, then preview/query it in `sparcd-web` or the
+static marimo notebook. Therefore S3 sync updates the canonical upload-level
+`observations.csv` and `UploadMeta.json` that those tools already read.
+Versioned append-only copies are allowed for audit/recovery, but they are not
+the compatibility output.
+
+> **How the upstream reader actually surfaces species (verified by the
+> uploader's P3, `../sparcd-uploader/plan.md` "CRITICAL verification
+> finding").** The existing reader is **Python, not Java**
+> (`server/s3/s3_access_helpers.py: get_s3_images`). It **lists image objects
+> under the upload prefix, presigns the listed key, then decorates those images
+> from canonical upload-level `media.csv` and `observations.csv`, matched on
+> the full object key.** It does not read
+> `<uploadPrefix>/observations/<userId>/<ISO>.csv`. The Java app likewise
+> reads and rewrites canonical `deployments.csv`, `media.csv`,
+> `observations.csv`, and `UploadMeta.json`. So append-only sidecars alone are
+> invisible to the existing tools; canonical merge/replacement is required.
+
+## Changelog
+
+- **2026-06-03** — Reconciled against the shipped sparcd-uploader (P0–P6)
+  and its fix commits. Build-time bucket allowlist replaced by runtime
+  BYO-S3 discovery; `@sparcd/s3-safe` description updated to the shipped
+  API; the old Java/Next web-reader assumption corrected to the Python
+  list-under-prefix + canonical CSV decoration reader; `observations.csv`
+  encoding pinned to the already-shipped `@sparcd/camtrap` writer;
+  settings-bucket discovery, `connectionId` cache keying, and CORS error
+  translation folded in from the uploader build.
+- **2026-06-04** — Tightened the tagger goal around Java-app-compatible
+  canonical metadata updates. P0 now starts with shared Vitest contract tests
+  and golden fixtures for uploader + tagger data handling before any S3 write
+  path is built.
 
 ## Design references
 
@@ -29,22 +63,62 @@ persistence contracts. Read both side-by-side.
 
 A keyboard-driven tagging UI that a researcher can open in a browser, tag
 several hundred images in a session, save progress locally without thinking
-about it, and sync to S3 when ready — with zero risk of overwriting or
-destroying prior work.
+about it, and sync to S3 when ready — while preserving the canonical metadata
+contract used by the Java app, `sparcd-web`, and the marimo/static explorer.
+
+## Static BYO-S3 security contract
+
+Same contract the uploader settled on (`../sparcd-uploader/plan.md`). This
+tagger is a **static browser app**: no backend service, no trusted server
+session, no server-side environment variables at runtime. A security review
+must treat the bundle as untrusted client code.
+
+**Decision.** Users bring their own S3-compatible endpoint, credentials,
+settings bucket, and collection bucket. Official SPARC'd deployments use the
+same model: credentials are scoped by IAM/provider policy and CORS, not by
+bucket names compiled into the app.
+
+**Enforceable controls.**
+
+- **IAM / provider policy** limits which buckets, prefixes, and S3 actions
+  the supplied credentials can use.
+- **Bucket CORS** limits which hosted app origins can make browser S3 calls.
+- **`@sparcd/s3-safe`** is the only S3 client boundary. It exposes read
+  methods, immutable append-only writers, and one reviewed conditional
+  replacement method for canonical Camtrap metadata. No delete or copy API.
+- **Sync protocol controls**: dry-run-by-default, `HEAD`/ETag verification,
+  pre-write conflict detection, immutable pre-write snapshots, and
+  conditional canonical replacement.
+
+**Non-controls.**
+
+- Build-time `VITE_*` bucket allowlists are **not** used for authorization —
+  they are not enforceable in a static app and would break BYO-S3 users.
+- Client-side bucket discovery is **not** authorization. It only finds
+  buckets the supplied credentials and CORS policy already expose.
 
 ## Stack
 
 - **Vite + React 18 + TypeScript** — single-page app, fast dev, static bundle
-- **Tailwind + shadcn/ui** — UI primitives
-- **TanStack Query** — S3 fetch cache and request dedup
+- **Tailwind + Field Notebook bespoke components** — match the uploader build;
+  do not introduce shadcn/ui unless the shared design system changes first
+- **TanStack Query** — S3 fetch cache and request dedup. **Key every query on
+  a `connectionId`**, not on endpoint+access-key alone, and call a
+  `clearClientCache()` on connect/disconnect — the uploader shipped this fix
+  (`8daf58f`) after stale credentials were reused across reconnects.
 - **TanStack Virtual** — virtualized image lists for large uploads
 - **Zustand** — edit/UI state
 - **Dexie.js** — IndexedDB wrapper, draft persistence
 - **react-hotkeys-hook** — keyboard shortcuts
 - **react-zoom-pan-pinch** — full-size image inspection
-- **`@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`** — portable across
-  MinIO, AWS S3, and Cloudflare R2 (config-only swap)
-- **papaparse** — Camtrap-DP CSV read/write
+- **`@sparcd/s3-safe` only for S3** — app code never imports
+  `@aws-sdk/client-s3`; presigned image URLs come from
+  `SafeS3Client.presignedGet`
+- **Vitest** — shared contract tests for Camtrap CSV, upload metadata,
+  uploader fixtures, tagger merge output, and wrapper safety behavior
+- **`@sparcd/camtrap` CSV parser/writer** — extend the shipped writer with the
+  readers/merge helpers needed here; use PapaParse internally only if the
+  package needs a CSV engine
 - **fuse.js** — fuzzy search for species autocomplete
 
 ## Shared packages
@@ -54,23 +128,43 @@ consumers bundle the source via Vite + pnpm workspace resolution.
 
 ### `packages/s3-safe` → `@sparcd/s3-safe`
 
-The single, blessed S3 boundary. Every tool that touches storage imports
-this. It enforces three guardrails the application code cannot bypass:
+Already shipped (the uploader established it, P0–P6), but the tagger needs
+one reviewed extension because Java-app-compatible tagging must replace
+canonical metadata. The single, blessed S3 boundary; every tool that touches
+storage imports it. The tagger uses the read methods, `writeImmutable` for
+audit snapshots, and a new conditional replacement method for canonical
+`observations.csv` / `UploadMeta.json`. It does **not** need
+`writeImmutableStream` (that is the uploader's per-file multipart writer; the
+tagger never streams large blobs). Shipped surface plus required extension:
 
-1. **Bucket allowlist** — pattern or explicit list, validated at client
-   construction. Operations on out-of-allowlist buckets throw before any
-   network call.
-2. **Read methods only**, plus one append-only writer:
+1. **Bucket allowlists, not a security boundary in a static app.** The
+   constructor is `(cfg, readAllowlist, writeAllowlist = [])` — a separate,
+   opt-in **write allowlist that is empty by default** (`BucketNotWritableError`
+   is the hard stop). In a BYO-S3 static app the tagger passes broad runtime
+   scope (`*`) for both, exactly as the uploader does; IAM/policy + CORS are
+   the real gate (see Static BYO-S3 security contract). The allowlist scopes
+   *object* operations only.
+2. **Read methods**, plus the tagger write surface:
    - `listObjects(bucket, prefix)` → `AsyncIterable<ObjectInfo>`
    - `getObject(bucket, key)` → `Uint8Array`
    - `statObject(bucket, key)` → metadata only
    - `presignedGet(bucket, key, ttlSec)` → URL
+   - `listBuckets()` → bucket names; **intentionally not allowlist-gated**
+     (it reads no object data) — the discovery primitive the tagger uses to
+     find the settings and collection buckets at runtime
    - `writeImmutable(bucket, key, body)` → conditional `PutObject` with
-     `IfNoneMatch: "*"`, throwing on `412 PreconditionFailed` if `key`
-     already exists
-3. **No destructive APIs exposed** — no `delete*`, `copy*`, or overwriting
-   `put*`. Lint rule (`no-restricted-imports`) prevents reintroduction at
-   the application layer.
+     `IfNoneMatch: "*"`, throwing `PreconditionFailedError` (412) if `key`
+     already exists, or `ConditionalPutUnsupportedError` (501) if the backend
+     does not enforce the precondition (no silent HEAD-then-PUT fallback)
+   - `replaceIfUnchanged(bucket, key, body, { etag, contentType })` →
+     conditional `PutObject` with `IfMatch: <etag>` for canonical metadata
+     replacement. This is a narrow compatibility exception for
+     `observations.csv` and `UploadMeta.json`, not a general overwrite API.
+     It throws a typed conflict if the remote object changed after the draft
+     was loaded.
+3. **No destructive APIs exposed** — no `delete*` or `copy*`. Direct
+   `@aws-sdk/client-s3` imports are forbidden outside `packages/s3-safe/src/`
+   by a lint rule added before app code writes to S3.
 
 **`IfNoneMatch: "*"` backend support.** Conditional writes require:
 AWS S3 added conditional `PutObject` support in August 2024, then added
@@ -83,6 +177,13 @@ distinct `ConditionalPutUnsupported` error and the wrapper must **not**
 silently fall back to a `HEAD`-then-`PUT` path — that fallback has a
 TOCTOU race the wrapper cannot close, and silently accepting it would
 defeat the safety design.
+
+**`IfMatch` backend support.** Canonical compatibility sync additionally
+requires conditional replacement with `IfMatch` against the reviewed ETag for
+`observations.csv` and `UploadMeta.json`. P0/P4 tests must prove the wrapper
+sends the header, treats stale ETags as typed conflicts, and does not fall
+back to an unconditional PUT. Live browser CORS must expose enough `HEAD`
+metadata for this check to work on the target endpoint.
 
 Endpoint config is the same shape for all three backends:
 
@@ -110,22 +211,42 @@ requirements.
 
 ### `packages/camtrap` → `@sparcd/camtrap`
 
-Pure TypeScript. No React, no S3.
+Pure TypeScript. No React, no S3. **Already shipped** (uploader P3); the
+writer the tagger needs exists — the uploader builds against it but always
+emits an empty `observations.csv`, leaving the row serializer for the tagger.
+The tagger extends this package with readers, merge helpers, and shared
+fixtures so uploader and tagger tests prove the same data contract.
 
 - Types: `Deployment`, `Media`, `Observation`, plus a `CamtrapBundle` that
-  groups all three for one upload.
-- Reader: takes raw CSV strings (deployments.csv, media.csv,
-  observations.csv) → parsed objects, with the column-index mapping
-  (no header row) handled in one place.
-- Writer: serializes back to the same byte-identical shape SPARC'd's Java
-  ingestor reads. Round-trip stable.
+  groups all three for one upload. `Observation` already carries `timestamp`,
+  `scientificName`, `count`, and `tags`.
+- Reader: **to be added in P0**. Takes raw CSV strings (`deployments.csv`,
+  `media.csv`, `observations.csv`) → parsed objects, with the fixed v016
+  column-index mapping (no header row) handled in one place. It must
+  round-trip rows from Java and `sparcd-web` fixtures and preserve unrelated
+  rows when the tagger changes one image.
+- Writer: `serializeObservations` is already verified byte-exact to the
+  v016 **20-column** shape (QUOTE_ALL, LF-terminated). **Column semantics are
+  pinned in code, not "to be confirmed at build time":**
+  - col 4 `timestamp` — the corrected ISO timestamp
+  - col 8 `scientific_name` + col 9 `count` — the SPARC'd observation
+    (species + count only; there is no behaviour field)
+  - **col 19 `comments`** — where the bracketed tag markers live (see grammar
+    below). There is **no dedicated `tags` column**; everything bracketed
+    lands in `comments`.
+- Merge helpers: **to be added in P0/P1**. Given canonical media +
+  observations and local draft edits, replace all observation rows for the
+  edited media IDs, preserve unrelated rows, filter zero-count rows the same
+  way `sparcd-web` does, and recompute `imagesWithSpecies` for
+  `UploadMeta.json`.
 - Validators: schema checks, lat/lng sanity (the swapped-column bug we hit
-  in the marimo notebook), tag-string parser for the `[COMMONNAME:Owl]`
-  format.
-- Tag marker grammar: `tags` is a concatenated list of bracketed markers
-  `[PREFIX:value]`. Reserved prefixes for v0 are `COMMONNAME` and
-  `REQUESTED_SPECIES`. The parser must preserve and tolerate unknown
-  prefixes so future tools can add markers without breaking old readers.
+  in the marimo notebook), row-count checks, and tag-string parser for the
+  `[COMMONNAME:Owl]` format.
+- Tag marker grammar: the col-19 `comments` field holds a concatenated list
+  of bracketed markers `[PREFIX:value]`. Reserved prefixes for v0 are
+  `COMMONNAME` and `REQUESTED_SPECIES`. The parser must preserve and tolerate
+  unknown prefixes so future tools can add markers without breaking old
+  readers.
 
 ### `packages/types` → `@sparcd/types`
 
@@ -146,6 +267,64 @@ key, secret key** — with secure/region/path-style inferred from the
 endpoint (rare overrides behind an "Advanced" disclosure). It produces the
 `S3Config` consumed by `@sparcd/s3-safe` and is identical everywhere.
 Depends on `@sparcd/types` for the config shape.
+
+## Compatibility test standard
+
+Before implementing tagger S3 writes, add a shared Vitest contract harness that
+both `sparcd-uploader` and `sparcd-tagger` consume. This is step 1 because the
+data contract is more important than UI polish or storage plumbing.
+
+### Shared fixture layout
+
+Create durable golden fixtures under a shared test-data location, not inside
+one app:
+
+- `packages/camtrap/test/fixtures/java-v016/` — canonical `deployments.csv`,
+  `media.csv`, `observations.csv`, `UploadMeta.json`, and `species.json`
+  shaped like the Java app writes them.
+- `packages/camtrap/test/fixtures/sparcd-web-v016/` — the same files shaped
+  like current `sparcd-web` Python helpers write/read them. `sparcd-web` is
+  newer and may be inconsistent, so Java fixtures are the compatibility
+  baseline when behavior differs.
+- `packages/camtrap/test/fixtures/uploader-empty-v016/` — a new uploader
+  bundle with empty canonical `observations.csv`, matching
+  `sparcd-uploader`.
+- `packages/camtrap/test/fixtures/tagger-edited-v016/` — expected canonical
+  output after common tagger operations: add species, retag species, detag an
+  image, multi-species rows, Ghost (`Casper`), timestamp correction, and
+  requested-species marker in comments.
+
+Fixtures should be small enough for fast tests but large enough to cover
+multiple images, nested paths, multiple deployments when relevant, and one
+unrelated row that must survive every merge unchanged.
+
+### Required Vitest coverage
+
+- **Round-trip shape.** Parse fixture CSVs and serialize them without changing
+  fixed column counts, row order, quoting policy, or unrelated rows.
+- **Uploader contract.** `sparcd-uploader` output parses as valid v016
+  Camtrap data and exposes an empty canonical `observations.csv` base for the
+  tagger.
+- **Tagger merge contract.** Applying draft edits to canonical observations
+  produces exactly the `tagger-edited-v016` golden output.
+- **Retro-compatibility contract.** The edited golden output can be read by
+  lightweight Java-compatible and `sparcd-web`-compatible parsers in tests:
+  species lives in observation col 8, count in col 9, common name in col 19
+  as `[COMMONNAME:<name>]`, and media IDs match the full object keys used by
+  `media.csv`.
+- **UploadMeta contract.** `imagesWithSpecies` is recomputed as the number of
+  media items with at least one positive-count observation row, matching Java
+  and `sparcd-web`.
+- **No accidental data loss.** Retag/detag tests prove the merge only replaces
+  rows for edited media IDs and never drops unrelated observations,
+  deployments, or media rows.
+- **Wrapper safety.** Unit tests cover the future `replaceIfUnchanged`
+  behavior with mocked S3 responses: success on matching ETag, conflict on
+  stale ETag, no fallback overwrite, no delete/copy command.
+
+Root scripts should include `pnpm test` / `turbo run test`, and each package
+or app with data-contract code should expose a `test` script. S3 integration
+tests stay separate and opt-in; the default Vitest suite must run offline.
 
 ## Architecture
 
@@ -168,7 +347,10 @@ Settings/species.json  ─fetch─►  Fuse index in memory                  │
         └──────────────────────────────────────┬───────────────────────┘
                                                │ manual "Sync"
                                                ▼
-                              writeImmutable() → <uploadPrefix>/observations/<userId>/<ISO>.csv
+                         immutable snapshot + conditional canonical replace
+                                               │
+                                               ├─ replaceIfUnchanged() → <uploadPrefix>/observations.csv
+                                               └─ replaceIfUnchanged() → <uploadPrefix>/UploadMeta.json
 ```
 
 ### Layout
@@ -190,7 +372,13 @@ Three-pane CSS grid:
   below.) Submit applies to **all selected images at once**.
 - **Top bar** — collection picker, sync status (`local-only` /
   `unsynced edits` / `synced @ <time>` / `conflict`), keyboard cheatsheet
-  button.
+  button. **Collection discovery reuses the uploader's runtime model**
+  (`b7b161b`) as actually shipped: list visible buckets, keep
+  `sparcd-<uuid>` candidates, read
+  `Collections/<uuid>/collection.json`, and key selection as `bucket::uuid`.
+  If we later make collection discovery bucket-name-agnostic, update uploader
+  and tagger together; do not let the tagger invent a divergent collection
+  model.
 
 ### Performance & interaction (implementer concern, not the design pass)
 
@@ -212,6 +400,12 @@ decisions:
 - **Selection at scale** — selection state is index ranges, not per-cell
   React state, so selecting a 2,000-image burst doesn't re-render 2,000
   components.
+- **CORS error translation** — reuse the uploader's P2 mapping: 404 → "not
+  found", 403 → "access denied", and a status-less browser fetch failure →
+  "endpoint unreachable or the bucket CORS policy needs to allow GET/HEAD
+  from this origin." The SDK read works server-side; a **live in-browser CORS
+  preflight against the endpoint is still unconfirmed** and this origin may
+  need adding to the bucket CORS policy.
 
 ### Login screen
 
@@ -229,53 +423,55 @@ explorer's pattern). Everything else is *inferred*, not asked:
   the login gate.
 
 Values prefill from `.env` during local development only. In deployable
-static builds, `import.meta.env` may prefill non-secret values such as
-endpoint, region, bucket allowlist, and path defaults, but must never embed
-real access keys or secret keys. Users enter S3 credentials at runtime.
-The Java and sparcd-web apps use a different model (server-issued token);
-we don't share UI with them by design — different auth shape.
+static builds, `import.meta.env` may prefill non-secret convenience values
+such as endpoint, region, and path defaults, but must never embed real access
+keys or secret keys, and **never a bucket allowlist as an authorization
+boundary** (buckets are discovered at runtime — see the security contract).
+Users enter S3 credentials at runtime. The Java and sparcd-web apps use a
+different model (server-issued token); we don't share UI with them by design
+— different auth shape.
 
 ### Persistence — local
 
 - **Dexie schema** v1:
   - `drafts` table:
     `{ id (bucket+uploadPrefix+mediaPath), bucket, uploadPrefix, mediaPath,
-    baseObservationKey, baseCsvHash, label, count, freeTags,
+    baseObservationsETag, baseObservationsHash, baseUploadMetaETag,
+    baseUploadMetaHash, auditSnapshotKey, label, count, freeTags,
     requestedSpecies, questionable, timeOverride, lastEdited, dirty }`
     (`timeOverride` = optional corrected timestamp for this one image, on
     top of the upload offset; null when unset.)
     `label` holds the applied species **or** a non-animal label like
     **Ghost** — Ghost is just another label, not a separate `blank` flag. A
     SPARC'd observation is **species + count only** — there is no `behavior`
-    field (the Java `SpeciesEntry` model carries exactly species + amount).
-    The exact value/encoding (how Ghost and species land in
-    `observations.csv`) follows the upstream SPARC'd convention; the
-    implementer confirms it against the sparcd-web and SPARC'd Java
-    codebases at build time rather than inventing it here.
+    field. The value/encoding (how Ghost and species land in
+    `observations.csv`) is **already pinned** by the shipped
+    `serializeObservations`: species → col 8 `scientific_name` + col 9
+    `count`; bracketed markers → col 19 `comments`. Ghost is encoded as a
+    label through the same path, not a separate flag.
   - `uploads` table:
     `{ id (bucket+uploadPrefix), bucket, uploadPrefix, loadedAt,
-    latestRemoteObservationKey, latestRemoteCsvHash, timeOffset }`
+    observationsETag, observationsHash, uploadMetaETag, uploadMetaHash,
+    timeOffset }`
     (`timeOffset` = signed Δ y/mo/d/h/m/s applied to every image in the
     upload; null when unset.)
   - `sessions` table:
     `{ sessionId, userId, startedAt, finishedAt, syncedAt, syncedKey,
     syncedCsvHash }`
-- **Grounding rule.** When an upload has no prior append-only version under
-  `<uploadPrefix>/observations/<userId>/`, the draft is grounded on the
-  canonical upload-level `observations.csv`; `baseObservationKey = null`
-  and `baseCsvHash` is the hash of that canonical file. When an
-  append-only version exists, `baseObservationKey` is the most recent
-  versioned key and `baseCsvHash` is its hash. Sync-time conflict
-  detection compares the current remote `latestRemoteCsvHash` for that
-  upload against the draft's `baseCsvHash`; mismatch triggers the
-  conflict view before any write.
+- **Grounding rule.** The uploader **always writes an empty canonical
+  `observations.csv`** on initial upload (its open question resolved), so a
+  stable base file is guaranteed — no absent-file case to handle. Every draft
+  is grounded on the canonical upload-level `observations.csv` plus
+  `UploadMeta.json` loaded at session start. Sync-time conflict detection
+  compares current remote ETag/hash values for both files against the stored
+  base values; mismatch triggers the conflict view before any canonical write.
 - **`requestedSpecies` field.** When a tagger needs a species not in
   `Settings/species.json`, the combobox lets them tag with a free-text
   `requestedSpecies` string plus the existing `freeTags`. The sync export
-  records the request in the existing `tags` column, for example
-  `[REQUESTED_SPECIES:<value>]`, so the output keeps the existing
-  `observations.csv` row/column shape while still giving downstream admins
-  a machine-readable request. This is the committed answer to open
+  records the request as a `[REQUESTED_SPECIES:<value>]` marker in the col-19
+  `comments` field (alongside `[COMMONNAME:…]`), so the output keeps the
+  verified `observations.csv` row/column shape while still giving downstream
+  admins a machine-readable request. This is the committed answer to open
   question #3.
 - **Schema versioning.** Future schema changes use Dexie's versioning API
   (`db.version(N).stores({...}).upgrade(...)`). No ad-hoc store mutations
@@ -289,23 +485,39 @@ we don't share UI with them by design — different auth shape.
 
 - "Sync" button is the only path that writes to S3.
 - Pre-write:
-  - Lists existing `<uploadPrefix>/observations/<userId>/*.csv` for the
-    upload.
-  - Loads the latest, diffs against local drafts.
-  - Shows a confirmation dialog: N additions, M modifications, 0 deletions
-    (deletions are not a thing — we never erase).
+  - `HEAD` + load canonical `<uploadPrefix>/observations.csv` and
+    `<uploadPrefix>/UploadMeta.json`.
+  - If either ETag/hash differs from the draft base, enter the conflict view:
+    reload remote, show local-vs-remote row diffs, and require the user to
+    merge or discard local edits before retrying.
+  - Diff local drafts against canonical observations. Show a confirmation
+    dialog: N additions, M modifications, D removals. A removal means "remove
+    this species row from this media item" and is required for re-tagging
+    compatibility; it is not an object delete.
+  - Write immutable audit snapshots of the pre-change canonical files under
+    `<uploadPrefix>/.sparcd-tagger-snapshots/<userId>/<ISO>/` using
+    `writeImmutable`. These snapshots are for recovery only.
 - Write:
-  - `writeImmutable(bucket, "<uploadPrefix>/observations/<userId>/<ISO>.csv", serialized)`
-  - On 412/PreconditionFailed (key collision), bumps timestamp and retries
-    once — never overwrites.
-  - Records `syncedAt` and CSV hash in Dexie.
-- Recovery view: lists every
-  `<uploadPrefix>/observations/<userId>/*.csv` for the upload, lets the user
-  inspect or restore any version into the local draft.
+  - `replaceIfUnchanged(bucket, "<uploadPrefix>/observations.csv", serialized, { etag: baseObservationsETag })`
+  - `replaceIfUnchanged(bucket, "<uploadPrefix>/UploadMeta.json", serialized, { etag: baseUploadMetaETag })`
+  - `UploadMeta.json.imagesWithSpecies` is recomputed as the number of media
+    items with at least one positive-count observation row, matching the Java
+    app and `sparcd-web`.
+  - S3 has no atomic two-object transaction. The write order is
+    `observations.csv` first, `UploadMeta.json` second: if the second write
+    fails, existing tools can still read the new tags, but the upload tile
+    count may be stale until the tagger retries the metadata update. The
+    recovery view must detect and repair this state.
+  - On a conditional conflict, do not retry blind. Reload, show conflict UI,
+    and require an explicit merge.
+  - Records `syncedAt`, new ETags, and hashes in Dexie.
+- Recovery view: lists local snapshots and remote
+  `.sparcd-tagger-snapshots/<userId>/<ISO>/` versions, lets the user inspect
+  or restore one by running the same conditional canonical replacement flow.
 
-The existing canonical `observations.csv` remains read-only in this tool.
-The first sync implementation produces reviewable append-only output; direct
-consumption by Java/Next requires a separate reader/importer change.
+The canonical files are no longer read-only in this tool. Updating them is the
+point of S3 sync because current Java, `sparcd-web`, and marimo/static preview
+tools read those files and ignore append-only sidecars.
 
 ## Safety design
 
@@ -315,19 +527,27 @@ load-bearing. Four layers, each redundant:
 1. **IAM policy** — separate access key whose policy permits only
    `s3:ListBucket`, `s3:GetObject`, and `s3:PutObject` on
    `arn:aws:s3:::sparcd-test-*` (or the explicit test-bucket ARN list), with
-   writes scoped to `Collections/*/Uploads/*/observations/*` where the
-   backend supports object-prefix conditions.
+   writes scoped to canonical compatibility files and audit snapshots:
+   `Collections/*/Uploads/*/observations.csv`,
+   `Collections/*/Uploads/*/UploadMeta.json`, and
+   `Collections/*/Uploads/*/.sparcd-tagger-snapshots/*` where the backend
+   supports object-prefix conditions.
    **No `s3:DeleteObject`.** Belt + suspenders below in case the policy
    is ever misconfigured.
 2. **`@sparcd/s3-safe` wrapper** — the only S3 client allowed in app code.
    No destructive methods exposed. Lint rule blocks direct
    `@aws-sdk/client-s3` imports anywhere except `packages/s3-safe/src/`.
-3. **Bucket allowlist** — `S3_TEST_BUCKETS` env var, enforced at wrapper
-   construction. Anything outside throws.
-4. **Immutable writes** — every save is a new timestamped key. The wrapper
-   uses conditional `PutObject` with `IfNoneMatch: "*"`; a preflight `HEAD`
-   may be used for friendlier errors, but it is never the overwrite-safety
-   mechanism.
+3. **Runtime permissions, not build-time bucket gates** — this is a static
+   BYO-S3 app, so bucket names are never compiled into the bundle as a
+   security boundary (the uploader tried a build-time allowlist +
+   `ProductionGate`, then removed both). The connected credentials' IAM
+   policy and bucket CORS decide what the browser can read or write. The app
+   discovers the settings/collection buckets by probing for marker objects,
+   keeps dry-run on by default, and uses only the reviewed wrapper APIs.
+4. **Conditional canonical replacement** — every sync snapshots the old
+   canonical files immutably, then replaces only `observations.csv` and
+   `UploadMeta.json` with `IfMatch` against the ETags the user reviewed. A
+   stale ETag is a conflict, never an automatic overwrite.
 
 Plus a **dry-run toggle** on the sync action, on by default for the first
 session. Until the user explicitly turns dry-run off, sync logs what it
@@ -351,9 +571,9 @@ year/month/day/hour/minute/second with a live preview) and per-image
 **Non-destructive.** Originals (EXIF / canonical CSV timestamps) are never
 rewritten in place. Corrections are stored locally (`uploads.timeOffset`,
 `drafts.timeOverride`), applied on display, and emitted as the corrected
-timestamp in the append-only synced output. The exact write encoding
-follows the upstream SPARC'd convention; the implementer confirms it against
-sparcd-web / the Java app rather than inventing it here.
+timestamp in the canonical synced output. The corrected timestamp is emitted
+in `observations.csv` col 4 (`Observation.timestamp`), per the shipped
+`serializeObservations`.
 
 ## Sequence/burst grouping
 
@@ -365,9 +585,18 @@ button is one keystroke.
 
 ## Species / label autocomplete
 
-- Load `Settings/species.json` once at session start.
-- P0 validates the exact object path and JSON shape against the test bucket;
+- Load `Settings/species.json` once at session start. **It almost certainly
+  lives in the settings bucket, not the per-collection bucket** — the
+  uploader's P2 found `Settings/locations.json` in a separate settings bucket
+  (prefer `sparcd-settings-*`, fall back to legacy `sparcd`; this deployment
+  uses `sparcd`), discovered by probing visible buckets for the marker. P0
+  reuses that discovery for `species.json` rather than assuming the collection
+  bucket.
+- P0 validates the exact object path and JSON shape against the live bucket;
   the current marimo explorer proves CSV/media reads, not this species file.
+  Watch for the same **id-is-not-unique** contract `locations.json` has (ids
+  repeat with different data; upstream keys by a composite) — confirm whether
+  species keys are unique before keying anything on them.
 - Build a Fuse index over `commonName` + `scientificName` + `genus`.
 - **Persistent, scrollable, browsable list — not only a type-to-filter
   popover.** Volunteers don't know the list cold; scanning to recognize a
@@ -412,12 +641,12 @@ button is one keystroke.
 
 | Phase | Scope | S3 writes |
 |---|---|---|
-| **P0** | Scaffold app + 4 packages (`s3-safe`, `camtrap`, `types`, `auth-ui`); shared Connection screen; image viewer reads from hardcoded test bucket; verify browser CORS for list/get/head and validate `Settings/species.json` path/shape | None |
+| **P0** | **Shared Vitest contract harness first**: root/package `test` scripts, Java-baseline and `sparcd-web` fixture data, uploader-empty fixture, tagger-edited golden fixture; extend `@sparcd/camtrap` with v016 readers/merge helpers; prove uploader output parses and tagger merge output matches golden files; scaffold app, reuse the four shipped packages (`s3-safe`, `camtrap`, `types`, `auth-ui`); shared Connection screen; shipped uploader collection discovery (`sparcd-<uuid>` candidates); image viewer reads from a discovered collection; verify browser CORS for list/get/head; validate `Settings/species.json` path/shape | None |
 | **P1** | Single-image tag editing; Dexie drafts; J/K nav; species autocomplete | None |
 | **P2** | Sequence/burst grouping; full keyboard set; cheatsheet modal | None |
 | **P3** | Batch tagging (multi-select); recovery view (local-only at this stage) | None |
-| **P4** | Append-immutable sync under `<uploadPrefix>/observations/<userId>/` — **only after manual review of `@sparcd/s3-safe` conditional write implementation and endpoint-specific CORS/PUT preflight** | First writes, dry-run by default |
-| **P5** | Cross-version recovery (load any prior versioned observations CSV from S3 into local) | Reads only |
+| **P4** | Compatibility sync: immutable pre-write snapshots plus conditional canonical replacement of `<uploadPrefix>/observations.csv` and `<uploadPrefix>/UploadMeta.json`; only after manual review of `replaceIfUnchanged`, mocked wrapper tests, fixture-backed merge tests, and endpoint-specific CORS/PUT preflight | First writes, dry-run by default |
+| **P5** | Snapshot/version recovery: load prior snapshots into local, restore through the same conditional canonical replacement flow | Same as P4 only on restore |
 | **P6** | Internal navigation sections beyond the tagging core: Browse, History (surfaces the P5 recovery capability), Settings | Reads only |
 
 P0–P3 are fully usable as a local-only tagger. The S3 write path doesn't
@@ -426,26 +655,29 @@ reviewed in isolation before any real bucket is at risk.
 
 ## Open questions for before P0
 
-1. **User identity for the immutable write path.** The IAM access key
-   stamps the bucket-side writer; we also want a logical `userId` baked
-   into the object key so two researchers can sync from the same browser
-   profile without collision. Options: prompt at session start, derive
-   from access key, or pin to a config file. Lean: prompt + persist.
-2. **First test bucket.** Need a concrete bucket name (or naming pattern)
-   that's confirmed write-allowed for the test IAM key, so the
-   `S3_TEST_BUCKETS` allowlist starts populated and P0 has somewhere to
-   point at without changes.
+1. **User identity for snapshots and edit comments.** The IAM access key
+   stamps the bucket-side writer; we also want a logical `userId` for audit
+   snapshot paths and optional `UploadMeta.json.editComments` entries. Options:
+   prompt at session start, derive from access key, or pin to a config file.
+   Lean: prompt + persist.
+2. **First write-allowed bucket/credentials.** Not a build-time allowlist
+   (that idea is gone — see Static BYO-S3 security contract); a concrete
+   credential set whose IAM policy permits conditional `PUT` on canonical
+   `observations.csv` / `UploadMeta.json` and immutable snapshot writes on a
+   real bucket, so P4 has somewhere to test compatibility writes.
 3. ~~**Species hierarchy edits.**~~ Resolved: tagger never edits the
    hierarchy; missing species fall through to the `requestedSpecies`
-   field (see Persistence — local), exported through the existing `tags`
-   column for an upstream admin to act on. Cross-referenced in the Dexie
-   schema.
-4. **Canonical merge path.** Who or what promotes a reviewed append-only
-   version from `<uploadPrefix>/observations/<userId>/<ISO>.csv` into the
-   canonical upload-level `observations.csv`, if existing Java/Next readers
-   need to see the new tags? Lean: keep promotion out of this tagger until
-   the append-only review workflow is proven. Cross-link: this is the
-   tagging-side half of the uploader's **Reader sentinel rollout** question.
+   field (see Persistence — local), exported as a `[REQUESTED_SPECIES:…]`
+   marker in the col-19 `comments` field for an upstream admin to act on.
+   Cross-referenced in the Dexie schema.
+4. ~~**Canonical merge path.**~~ Resolved by compatibility requirement: the
+   tagger itself merges local edits into canonical `observations.csv` and
+   recomputes canonical `UploadMeta.json.imagesWithSpecies` during P4 sync.
+   Append-only files are audit snapshots only.
+5. **Conditional replacement backend support.** Verify the target MinIO/R2/S3
+   endpoints enforce `IfMatch` on `PutObject` from browser SDK calls and expose
+   enough `HEAD` metadata/ETag via CORS. If a backend cannot enforce this, P4
+   cannot safely write canonical metadata from a static app.
 
 ## Out of scope (explicit, for future tools)
 
