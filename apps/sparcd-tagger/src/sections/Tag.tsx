@@ -34,6 +34,7 @@ export function Tag() {
   const connectionId = useStore((s) => s.connectionId);
   const collectionKey = useStore((s) => s.selectedCollectionKey);
   const uploadPrefix = useStore((s) => s.selectedUploadPrefix);
+  const burstGroupingEnabled = useStore((s) => s.burstGroupingEnabled);
   const burstThreshold = useStore((s) => s.burstThresholdSec);
   const pendingSnapshots = useStore((s) => s.pendingSnapshots);
   const clearPendingSnapshots = useStore((s) => s.clearPendingSnapshots);
@@ -79,8 +80,8 @@ export function Tag() {
   // Burst grouping (visual bands + whole-burst selection / nav). Recomputed when
   // the image list or the per-session threshold changes.
   const grouping = useMemo<BurstGrouping>(
-    () => groupBursts(list, burstThreshold),
-    [list, burstThreshold],
+    () => groupBursts(list, burstThreshold, burstGroupingEnabled),
+    [list, burstThreshold, burstGroupingEnabled],
   );
 
   // Reset focus/selection when the upload changes / data arrives.

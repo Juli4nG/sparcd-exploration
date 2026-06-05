@@ -80,6 +80,22 @@ describe('groupBursts', () => {
   });
 
   it('returns one empty grouping for no images', () => {
-    expect(groupBursts([], 60)).toEqual({ bursts: [], burstOf: [] });
+    expect(groupBursts([], 60)).toEqual({ bursts: [], burstOf: [], banded: true });
+  });
+
+  it('collapses everything into one unbanded group when disabled', () => {
+    const { bursts, burstOf, banded } = groupBursts(
+      [
+        img('a', 'loc-a', '2024-01-01T08:00:00'),
+        img('b', 'loc-b', '2024-01-01T09:00:00'), // different deployment + far apart
+        img('c', 'loc-a', ''), // missing timestamp
+      ],
+      60,
+      false,
+    );
+    expect(banded).toBe(false);
+    expect(bursts).toHaveLength(1);
+    expect(bursts[0]).toMatchObject({ start: 0, end: 2, size: 3 });
+    expect(burstOf).toEqual([0, 0, 0]);
   });
 });

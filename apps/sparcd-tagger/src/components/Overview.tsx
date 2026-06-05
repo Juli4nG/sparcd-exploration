@@ -81,7 +81,7 @@ export function Overview({
     const items: FlatItem[] = [];
     const rowOf = new Array<number>(list.length);
     for (const b of grouping.bursts) {
-      items.push({ kind: 'band', burst: b });
+      if (grouping.banded) items.push({ kind: 'band', burst: b });
       for (let i = b.start; i <= b.end; i += cols) {
         const indices = range(i, Math.min(i + cols - 1, b.end));
         const rowIdx = items.length;

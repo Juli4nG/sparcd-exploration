@@ -26,6 +26,7 @@ export type Burst = {
 export type BurstGrouping = {
   bursts: Burst[];
   burstOf: number[]; // image index → burst id (same length as the image list)
+  banded: boolean; // false when grouping is off — the Overview renders rows with no burst bands
 };
 
 // Naive `YYYY-MM-DDTHH:mm:ss` → epoch seconds. Parsed as UTC so the value is
@@ -42,7 +43,31 @@ function epoch(iso: string): number | null {
   );
 }
 
-export function groupBursts(images: TagImage[], thresholdSec: number): BurstGrouping {
+export function groupBursts(
+  images: TagImage[],
+  thresholdSec: number,
+  enabled = true,
+): BurstGrouping {
+  // Grouping off (the default — our cameras shoot no bursts): collapse the whole
+  // upload into one flat group so whole-burst select / nav helpers stay valid,
+  // but flag it unbanded so the Overview shows plain rows with no burst headers.
+  if (!enabled) {
+    const bursts: Burst[] = images.length
+      ? [
+          {
+            id: 0,
+            start: 0,
+            end: images.length - 1,
+            size: images.length,
+            deploymentId: images[0].deploymentId,
+            startTs: images[0].baseTimestamp,
+            endTs: images[images.length - 1].baseTimestamp,
+          },
+        ]
+      : [];
+    return { bursts, burstOf: new Array<number>(images.length).fill(0), banded: false };
+  }
+
   const bursts: Burst[] = [];
   const burstOf = new Array<number>(images.length);
 
@@ -78,5 +103,5 @@ export function groupBursts(images: TagImage[], thresholdSec: number): BurstGrou
     prevEpoch = ts;
   }
 
-  return { bursts, burstOf };
+  return { bursts, burstOf, banded: true };
 }

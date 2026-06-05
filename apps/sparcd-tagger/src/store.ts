@@ -34,7 +34,8 @@ type TaggerState = {
   // Settings (the login gate stays three-field; identity + dry-run live here).
   taggerUser: string; // logical userId for snapshot paths + editComments
   dryRun: boolean; // on by default; P4 sync logs and writes nothing until off
-  burstThresholdSec: number; // sequence grouping threshold (5–600s)
+  burstGroupingEnabled: boolean; // off by default — our cameras shoot no bursts
+  burstThresholdSec: number; // sequence grouping threshold (5–600s), used when enabled
 
   connect: (config: S3Config) => void;
   disconnect: () => void;
@@ -47,6 +48,7 @@ type TaggerState = {
   setSyncState: (state: SyncState) => void;
   setTaggerUser: (value: string) => void;
   setDryRun: (value: boolean) => void;
+  setBurstGrouping: (value: boolean) => void;
   setBurstThreshold: (value: number) => void;
 };
 
@@ -61,6 +63,7 @@ export const useStore = create<TaggerState>((set) => ({
   pendingSnapshots: false,
   taggerUser: '',
   dryRun: true,
+  burstGroupingEnabled: false,
   burstThresholdSec: 60,
 
   connect: (config) => {
@@ -100,5 +103,6 @@ export const useStore = create<TaggerState>((set) => ({
   setSyncState: (state) => set({ syncState: state }),
   setTaggerUser: (value) => set({ taggerUser: value }),
   setDryRun: (value) => set({ dryRun: value }),
+  setBurstGrouping: (value) => set({ burstGroupingEnabled: value }),
   setBurstThreshold: (value) => set({ burstThresholdSec: value }),
 }));

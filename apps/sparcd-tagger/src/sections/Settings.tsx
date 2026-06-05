@@ -11,6 +11,8 @@ export function Settings() {
   const setTaggerUser = useStore((s) => s.setTaggerUser);
   const dryRun = useStore((s) => s.dryRun);
   const setDryRun = useStore((s) => s.setDryRun);
+  const burstOn = useStore((s) => s.burstGroupingEnabled);
+  const setBurstOn = useStore((s) => s.setBurstGrouping);
   const burst = useStore((s) => s.burstThresholdSec);
   const setBurst = useStore((s) => s.setBurstThreshold);
   const cfg = useStore((s) => s.s3Config);
@@ -55,22 +57,41 @@ export function Settings() {
       </section>
 
       <section>
-        <label htmlFor="burst" className={kicker}>
-          Burst grouping threshold — {burst}s
+        <span className={kicker}>Burst grouping</span>
+        <label className="flex items-center gap-2.5 font-body text-[14px] text-ink">
+          <input
+            type="checkbox"
+            className="w-4 h-4 accent-accent"
+            checked={burstOn}
+            onChange={(e) => setBurstOn(e.target.checked)}
+          />
+          Group rapid sequences into bursts
         </label>
-        <input
-          id="burst"
-          type="range"
-          min={5}
-          max={600}
-          step={5}
-          value={burst}
-          onChange={(e) => setBurst(Number(e.target.value))}
-          className="w-full accent-accent"
-        />
         <p className="mt-1.5 text-[13px] text-inkMute font-body">
-          Images within this window on one camera group into a burst.
+          Off by default — our cameras shoot no bursts, so the Overview stays a flat strip. Turn it
+          on for cameras that fire sequences and the strip gains burst bands plus whole-burst
+          selection.
         </p>
+        {burstOn && (
+          <div className="mt-4 pl-6 border-l border-ruleSoft">
+            <label htmlFor="burst" className={kicker}>
+              Threshold — {burst}s
+            </label>
+            <input
+              id="burst"
+              type="range"
+              min={5}
+              max={600}
+              step={5}
+              value={burst}
+              onChange={(e) => setBurst(Number(e.target.value))}
+              className="w-full accent-accent"
+            />
+            <p className="mt-1.5 text-[13px] text-inkMute font-body">
+              Images within this window on one camera group into a burst.
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="border-t border-ruleSoft pt-6">
