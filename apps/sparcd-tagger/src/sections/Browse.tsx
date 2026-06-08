@@ -56,7 +56,13 @@ export function Browse() {
 
       {/* Uploads for the chosen collection */}
       <div className="overflow-y-auto p-5">
-        {!collectionKey && <Empty>Select a collection to see its uploads.</Empty>}
+        {!collectionKey && (
+          <CollectionPrompt
+            collectionCount={collections.data?.length}
+            speciesCount={species.data?.species.length}
+            loading={collections.isLoading}
+          />
+        )}
         {collectionKey && (
           <>
             <h1 className="font-display text-[20px] text-ink mb-4">
@@ -90,10 +96,116 @@ function Status({ q, empty }: { q: { isLoading: boolean; isError: boolean; error
   return null;
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+// The first-run canvas. Instead of an empty void, a field-journal frontispiece:
+// a stamped track (camera traps fire on what walks past — here, a wildcat's paw)
+// ringed by idle motion-detection pulses, with a cue pointing back to the rail.
+function CollectionPrompt({
+  collectionCount,
+  speciesCount,
+  loading,
+}: {
+  collectionCount?: number;
+  speciesCount?: number;
+  loading: boolean;
+}) {
   return (
-    <div className="h-full grid place-items-center">
-      <p className="text-[15px] text-inkMute font-body">{children}</p>
+    <div className="relative h-full grid place-items-center px-6">
+      {/* Anchored to the panel edge, nudging the eye toward the collection rail. */}
+      <div
+        className="fn-rise absolute left-1 top-1/2 -translate-y-1/2 hidden lg:flex items-center gap-2 text-inkMute"
+        style={{ animationDelay: '0.5s' }}
+      >
+        <span className="fn-nudge text-accent" aria-hidden>
+          <svg width="34" height="14" viewBox="0 0 34 14" fill="none">
+            <path
+              d="M33 7H2M2 7l5-5M2 7l5 5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] [writing-mode:vertical-rl] rotate-180">
+          Start here
+        </span>
+      </div>
+
+      <div className="max-w-[420px] text-center">
+        <div className="fn-rise mx-auto mb-7 grid place-items-center" style={{ animationDelay: '0.05s' }}>
+          <PawStamp />
+        </div>
+
+        <p className={`fn-rise ${kicker} block`} style={{ animationDelay: '0.15s' }}>
+          Field Notebook · Tagger
+        </p>
+
+        <h1
+          className="fn-rise font-display text-[27px] leading-tight text-ink mt-2 text-balance"
+          style={{ animationDelay: '0.25s' }}
+        >
+          Pick up a collection to begin
+        </h1>
+
+        <p
+          className="fn-rise font-body text-[14px] leading-relaxed text-inkSoft mt-3 mx-auto max-w-[34ch] text-pretty"
+          style={{ animationDelay: '0.35s' }}
+        >
+          Choose one from the rail on the left to see its uploads — then open an
+          upload to start tagging what the cameras caught.
+        </p>
+
+        <div
+          className="fn-rise mt-7 inline-flex items-center gap-3 border-t border-ruleSoft pt-3 font-mono text-[12px] text-inkMute"
+          style={{ animationDelay: '0.45s' }}
+        >
+          {loading ? (
+            'Loading collections…'
+          ) : (
+            <>
+              <span className="text-inkSoft">{collectionCount ?? 0}</span> collections in view
+              {speciesCount != null && (
+                <>
+                  <span className="text-ruleSoft" aria-hidden>
+                    ·
+                  </span>
+                  <span className="text-inkSoft">{speciesCount}</span> species ready
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
+  );
+}
+
+// A pressed wildcat track ringed by idle motion-sensor pulses.
+function PawStamp() {
+  return (
+    <svg width="108" height="108" viewBox="0 0 108 108" fill="none" aria-hidden role="img">
+      {[0, 1.05, 2.1].map((delay, i) => (
+        <circle
+          key={i}
+          className="fn-scan"
+          cx="54"
+          cy="54"
+          r="30"
+          stroke="var(--accent)"
+          strokeWidth="1"
+          fill="none"
+          style={{ animationDelay: `${delay}s` }}
+        />
+      ))}
+      <g fill="var(--ink)" opacity="0.9">
+        {/* metacarpal pad */}
+        <path d="M54 86c-12 0-19-7-19-15 0-7 8-11 19-11s19 4 19 11c0 8-7 15-19 15Z" />
+        {/* toe pads */}
+        <ellipse cx="33" cy="49" rx="6" ry="8" transform="rotate(-18 33 49)" />
+        <ellipse cx="46" cy="38" rx="6" ry="9" transform="rotate(-6 46 38)" />
+        <ellipse cx="62" cy="38" rx="6" ry="9" transform="rotate(6 62 38)" />
+        <ellipse cx="75" cy="49" rx="6" ry="8" transform="rotate(18 75 49)" />
+      </g>
+    </svg>
   );
 }

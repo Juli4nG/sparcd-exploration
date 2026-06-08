@@ -25,7 +25,7 @@ export function Chrome({ children }: { children: ReactNode }) {
   const displayState = syncState === 'local-only' && hasDirty ? 'unsynced' : syncState;
 
   return (
-    <div className="min-h-screen flex flex-col bg-paper">
+    <div className="h-screen flex flex-col bg-paper">
       <header className="h-14 shrink-0 bg-panel border-b border-rule flex items-stretch px-4">
         <div className="flex items-center gap-2.5 pr-6">
           <img src={`${import.meta.env.BASE_URL}sparcd.png`} alt="SPARC'd" className="h-7 w-auto" />
@@ -69,7 +69,7 @@ export function Chrome({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0">{children}</main>
+      <main className="flex-1 min-h-0 overflow-y-auto">{children}</main>
     </div>
   );
 }

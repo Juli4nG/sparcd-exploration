@@ -45,6 +45,74 @@ body,
   height: 100%;
 }
 
+/* Empty-state frontispiece: staggered settle-in, a left-pointing cue that
+   nudges toward the rail, and motion-detection rings behind the paw stamp. */
+@keyframes fn-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fn-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-6px);
+  }
+}
+
+@keyframes fn-scan {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+  70% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+
+/* `backwards` shows the 0% frame during the delay, then settles to the
+   element's natural opacity:1 — so a skipped/broken animation never strands
+   the content invisible. */
+.fn-rise {
+  animation: fn-rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+
+.fn-nudge {
+  animation: fn-nudge 1.8s ease-in-out infinite;
+}
+
+.fn-scan {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fn-scan 3.2s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fn-rise {
+    opacity: 1;
+    animation: none;
+  }
+  .fn-nudge,
+  .fn-scan {
+    animation: none;
+  }
+  .fn-scan {
+    opacity: 0;
+  }
+}
+
 body {
   margin: 0;
   background: var(--paper);
