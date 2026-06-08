@@ -28,7 +28,7 @@ export function Chrome({ children }: { children: ReactNode }) {
     <div className="min-h-screen flex flex-col bg-paper">
       <header className="h-14 shrink-0 bg-panel border-b border-rule flex items-stretch px-4">
         <div className="flex items-center gap-2.5 pr-6">
-          <span className="inline-block w-4 h-4 bg-accent" aria-hidden />
+          <img src="/sparcd.png" alt="SPARC'd" className="h-7 w-auto" />
           <span className="font-display text-[22px] font-[600] text-ink leading-none whitespace-nowrap">
             SPARC'd <span className="text-inkMute">·</span> Tagger
           </span>
