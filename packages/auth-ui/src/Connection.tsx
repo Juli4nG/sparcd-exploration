@@ -62,7 +62,7 @@ export function Connection({ toolName, initialConfig, onConnect }: ConnectionPro
         aria-label={`Connect to SPARC'd · ${toolName}`}
       >
         <div className="flex items-center gap-2.5 mb-1">
-          <span className="inline-block w-4 h-4 bg-accent" aria-hidden />
+          <img src={`${import.meta.env.BASE_URL}sparcd.png`} alt="SPARC'd" className="h-7 w-auto" />
           <span className="font-display text-[22px] font-[600] text-ink leading-none">
             SPARC'd <span className="text-inkMute">·</span> {toolName}
           </span>
