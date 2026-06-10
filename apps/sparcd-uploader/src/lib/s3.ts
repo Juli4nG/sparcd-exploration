@@ -3,7 +3,13 @@
 // credentials, not baked into the JS bundle. IAM/CORS and the wrapper's
 // append-only methods are the real safety boundaries.
 
-import { SafeS3Client, BucketNotAllowedError } from '@sparcd/s3-safe';
+import {
+  SafeS3Client,
+  listCollections as listCollectionsWith,
+  parseCollectionKey,
+  translateReadError,
+  type CollectionRef,
+} from '@sparcd/s3-safe';
 import type { S3Config } from '@sparcd/types';
 import { LOCATIONS_KEY, parseLocations, type LocationsParse } from './locations';
 
@@ -78,65 +84,20 @@ export async function fetchLocations(cfg: S3Config): Promise<LocationsResult> {
   try {
     bytes = await client.getObject(settingsBucket, LOCATIONS_KEY);
   } catch (err) {
-    throw translateReadError(err, settingsBucket);
+    throw translateReadError(err, `"${LOCATIONS_KEY}" in bucket "${settingsBucket}"`);
   }
   const text = new TextDecoder().decode(bytes);
   const parsed = parseLocations(text);
   return { ...parsed, settingsBucket };
 }
 
-export type CollectionRef = {
-  key: string;
-  bucket: string;
-  uuid: string;
-  name: string | null;
-  organization: string | null;
-};
+// Collection discovery, keying, and the `CollectionRef` shape live in
+// `@sparcd/s3-safe` (shared with the tagger). We re-export them through this
+// facade and keep the `cfg`-based entry so callers stay on the local client.
+export { parseCollectionKey, type CollectionRef };
 
-// A collection *is* a bucket named `sparcd-<uuid>`, and its marker lives at the
-// deterministic key `Collections/<uuid>/collection.json` (uuid = bucket name
-// minus this prefix). This mirrors the upstream SPARC'd `get_user_collections`.
-const COLLECTION_BUCKET_PREFIX = 'sparcd-';
-
-/**
- * Discover collections by reading the deterministic marker in each
- * `sparcd-<uuid>` bucket. We never list the `Collections/` prefix — that walks
- * every upload image and paginates into thousands of requests across all
- * buckets. One small GET per candidate bucket also gives us the human-readable
- * name for the picker, so no second round-trip is needed.
- */
-export async function listCollections(cfg: S3Config): Promise<CollectionRef[]> {
-  const client = getClient(cfg);
-  const buckets = await client.listBuckets();
-  const candidates = buckets.filter(
-    (b) => b.startsWith(COLLECTION_BUCKET_PREFIX) && b.length > COLLECTION_BUCKET_PREFIX.length,
-  );
-  const found: CollectionRef[] = [];
-  await Promise.all(
-    candidates.map(async (bucket) => {
-      const uuid = bucket.slice(COLLECTION_BUCKET_PREFIX.length).toLowerCase();
-      try {
-        const bytes = await client.getObject(bucket, `Collections/${uuid}/collection.json`);
-        const doc = JSON.parse(new TextDecoder().decode(bytes)) as {
-          nameProperty?: string;
-          organizationProperty?: string;
-        };
-        found.push({
-          key: `${bucket}::${uuid}`,
-          bucket,
-          uuid,
-          name: doc.nameProperty?.trim() || null,
-          organization: doc.organizationProperty?.trim() || null,
-        });
-      } catch {
-        // No collection marker, or the bucket is unreadable / CORS-blocked.
-      }
-    }),
-  );
-  // Sort by display name so the picker reads alphabetically; fall back to bucket.
-  return found.sort(
-    (a, b) => (a.name ?? a.bucket).localeCompare(b.name ?? b.bucket) || a.uuid.localeCompare(b.uuid),
-  );
+export function listCollections(cfg: S3Config): Promise<CollectionRef[]> {
+  return listCollectionsWith(getClient(cfg));
 }
 
 // Split one CSV line into fields. The live `deployments.csv` files are wildly
@@ -207,23 +168,3 @@ export async function listCollectionDeploymentLocationIds(
   return [...ids];
 }
 
-function translateReadError(err: unknown, bucket: string): Error {
-  if (err instanceof BucketNotAllowedError) return err;
-  const e = err as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
-  const status = e.$metadata?.httpStatusCode;
-  if (status === 404 || e.name === 'NoSuchKey') {
-    return new Error(`"${LOCATIONS_KEY}" not found in bucket "${bucket}".`);
-  }
-  if (status === 403 || e.name === 'AccessDenied') {
-    return new Error(`Access denied reading "${LOCATIONS_KEY}" — check the key's read permissions.`);
-  }
-  // No HTTP status from a browser fetch almost always means the request never
-  // completed: a CORS preflight rejection or a network/DNS/TLS failure.
-  if (status === undefined) {
-    return new Error(
-      `Could not reach the endpoint to read "${LOCATIONS_KEY}". If the endpoint is correct, ` +
-        `the bucket's CORS policy likely needs to allow GET/HEAD from this origin.`,
-    );
-  }
-  return new Error(`Failed to read "${LOCATIONS_KEY}" (HTTP ${status}).`);
-}

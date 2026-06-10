@@ -1,11 +1,17 @@
 // The tagger's single point of contact with `@sparcd/s3-safe`. Static BYO-S3:
 // bucket access is discovered at runtime from the connected credentials, never
 // baked into the bundle. IAM/CORS + the wrapper's reviewed methods are the real
-// safety boundary. Collection discovery deliberately mirrors the uploader
-// (`apps/sparcd-uploader/src/lib/s3.ts`) so the two tools never diverge on what
-// a collection is or how it is keyed.
+// safety boundary. Collection discovery and read-error translation come from
+// `@sparcd/s3-safe` so the tagger and uploader cannot diverge on what a
+// collection is or how a failed read is reported.
 
-import { SafeS3Client, BucketNotAllowedError } from '@sparcd/s3-safe';
+import {
+  SafeS3Client,
+  listCollections as listCollectionsWith,
+  parseCollectionKey,
+  translateReadError,
+  type CollectionRef,
+} from '@sparcd/s3-safe';
 import type { S3Config } from '@sparcd/types';
 import { parseUploadMeta, parseDeployments } from '@sparcd/camtrap';
 import { sha256Hex } from './hash';
@@ -46,56 +52,16 @@ export function getWriteClient(cfg: S3Config): SafeS3Client {
   return client;
 }
 
-// --- Collections (same model as the uploader) ------------------------------
+// --- Collections -----------------------------------------------------------
+// Discovery, keying, and the `CollectionRef` shape live in `@sparcd/s3-safe` so
+// the tagger and uploader never diverge on what a collection is. We re-export
+// them through this facade (the app's single S3 contact point) and keep the
+// `cfg`-based entry so callers stay on the local, read-only client cache.
 
-const COLLECTION_BUCKET_PREFIX = 'sparcd-';
+export { parseCollectionKey, type CollectionRef };
 
-export type CollectionRef = {
-  key: string; // `${bucket}::${uuid}`
-  bucket: string;
-  uuid: string;
-  name: string | null;
-  organization: string | null;
-};
-
-/** Discover collections by reading the deterministic `collection.json` marker
- *  in each `sparcd-<uuid>` bucket. Never lists the `Collections/` prefix. */
-export async function listCollections(cfg: S3Config): Promise<CollectionRef[]> {
-  const client = getClient(cfg);
-  const buckets = await client.listBuckets();
-  const candidates = buckets.filter(
-    (b) => b.startsWith(COLLECTION_BUCKET_PREFIX) && b.length > COLLECTION_BUCKET_PREFIX.length,
-  );
-  const found: CollectionRef[] = [];
-  await Promise.all(
-    candidates.map(async (bucket) => {
-      const uuid = bucket.slice(COLLECTION_BUCKET_PREFIX.length).toLowerCase();
-      try {
-        const bytes = await client.getObject(bucket, `Collections/${uuid}/collection.json`);
-        const doc = JSON.parse(new TextDecoder().decode(bytes)) as {
-          nameProperty?: string;
-          organizationProperty?: string;
-        };
-        found.push({
-          key: `${bucket}::${uuid}`,
-          bucket,
-          uuid,
-          name: doc.nameProperty?.trim() || null,
-          organization: doc.organizationProperty?.trim() || null,
-        });
-      } catch {
-        // No marker, or unreadable / CORS-blocked. Keep probing.
-      }
-    }),
-  );
-  return found.sort(
-    (a, b) => (a.name ?? a.bucket).localeCompare(b.name ?? b.bucket) || a.uuid.localeCompare(b.uuid),
-  );
-}
-
-export function parseCollectionKey(key: string): { bucket: string; uuid: string } {
-  const [bucket, uuid] = key.split('::');
-  return { bucket, uuid };
+export function listCollections(cfg: S3Config): Promise<CollectionRef[]> {
+  return listCollectionsWith(getClient(cfg));
 }
 
 // --- Uploads + images within a collection ----------------------------------
@@ -138,7 +104,7 @@ export async function loadUploadSummary(
   try {
     meta = parseUploadMeta(decode(await client.getObject(bucket, `${uploadPrefix}${CANONICAL_FILE.uploadMeta}`)));
   } catch (err) {
-    throw translateS3Error(err, 'UploadMeta.json');
+    throw translateReadError(err, 'UploadMeta.json');
   }
 
   // The location label is secondary — a missing or unreadable `deployments.csv`
@@ -228,7 +194,7 @@ async function loadObject(
       hash: await sha256Hex(bytes),
     };
   } catch (err) {
-    throw translateS3Error(err, what);
+    throw translateReadError(err, what);
   }
 }
 
@@ -290,7 +256,7 @@ export async function listSnapshots(
   try {
     userDirs = await client.listCommonPrefixes(bucket, root);
   } catch (err) {
-    throw translateS3Error(err, 'snapshots');
+    throw translateReadError(err, 'snapshots');
   }
   const refs: SnapshotRef[] = [];
   await Promise.all(
@@ -360,7 +326,7 @@ export async function loadSnapshotBodies(
     try {
       return new TextDecoder().decode(await client.getObject(bucket, `${snapshotPrefix}${name}`));
     } catch (err) {
-      throw translateS3Error(err, what);
+      throw translateReadError(err, what);
     }
   };
   const [media, observations, uploadMeta] = await Promise.all([
@@ -395,21 +361,9 @@ export function makeSyncIO(
   };
 }
 
-// --- Error translation (reused from the uploader's CORS mapping) -----------
+// --- Error translation -----------------------------------------------------
+// The read-error → message mapping (including the static-app CORS case) lives
+// in `@sparcd/s3-safe`; re-export it so other tagger modules reach it through
+// this facade.
 
-/** Map an S3/browser-fetch failure to an actionable message. A status-less
- *  failure is almost always a CORS preflight rejection or network error. */
-export function translateS3Error(err: unknown, what: string): Error {
-  if (err instanceof BucketNotAllowedError) return err;
-  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-  const status = e.$metadata?.httpStatusCode;
-  if (status === 404 || e.name === 'NoSuchKey') return new Error(`${what} not found.`);
-  if (status === 403 || e.name === 'AccessDenied')
-    return new Error(`Access denied reading ${what} — check the key's read permissions.`);
-  if (status === undefined)
-    return new Error(
-      `Could not reach the endpoint to read ${what}. If the endpoint is correct, the ` +
-        `bucket's CORS policy likely needs to allow GET/HEAD from this origin.`,
-    );
-  return new Error(`Failed to read ${what} (HTTP ${status}).`);
-}
+export { translateReadError };

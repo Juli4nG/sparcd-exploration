@@ -156,6 +156,32 @@ function translateReplaceError(err: unknown, key: string): Error {
   return err as Error;
 }
 
+/**
+ * Translate a failed read into an actionable, user-facing message. `what`
+ * names the thing being read (e.g. `'UploadMeta.json'` or
+ * `'"locations.json" in bucket "X"'`) and is interpolated into the message.
+ *
+ * The `status === undefined` branch is specific to this project's static,
+ * browser-direct-to-S3 design: a CORS preflight rejection (or a network/DNS/TLS
+ * failure) aborts the fetch before any HTTP response, so there is no status to
+ * key on. Server-side S3 clients never hit that case. A `BucketNotAllowedError`
+ * is a programming error in the caller's allowlist, so it passes through as-is.
+ */
+export function translateReadError(err: unknown, what: string): Error {
+  if (err instanceof BucketNotAllowedError) return err;
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  const status = e.$metadata?.httpStatusCode;
+  if (status === 404 || e.name === 'NoSuchKey') return new Error(`${what} not found.`);
+  if (status === 403 || e.name === 'AccessDenied')
+    return new Error(`Access denied reading ${what} — check the key's read permissions.`);
+  if (status === undefined)
+    return new Error(
+      `Could not reach the endpoint to read ${what}. If the endpoint is correct, the ` +
+        `bucket's CORS policy likely needs to allow GET/HEAD from this origin.`,
+    );
+  return new Error(`Failed to read ${what} (HTTP ${status}).`);
+}
+
 export type WriteStreamResult = { etag?: string };
 
 export type WriteStreamOptions = {
@@ -484,4 +510,62 @@ export class SafeS3Client {
       throw translateWriteError(err, key);
     }
   }
+}
+
+// --- Collections -----------------------------------------------------------
+//
+// A "collection" is a `sparcd-<uuid>` bucket carrying a deterministic
+// `collection.json` marker. Discovery probes that exact key in every candidate
+// bucket rather than listing the `Collections/` prefix, so a bucket the key
+// cannot read (or that CORS blocks) is simply skipped, never fatal. Every tool
+// that needs the collection list shares this so they never diverge on what a
+// collection is or how it is keyed.
+
+const COLLECTION_BUCKET_PREFIX = 'sparcd-';
+
+export type CollectionRef = {
+  key: string; // `${bucket}::${uuid}`
+  bucket: string;
+  uuid: string;
+  name: string | null;
+  organization: string | null;
+};
+
+export async function listCollections(client: SafeS3Client): Promise<CollectionRef[]> {
+  const buckets = await client.listBuckets();
+  const candidates = buckets.filter(
+    (b) => b.startsWith(COLLECTION_BUCKET_PREFIX) && b.length > COLLECTION_BUCKET_PREFIX.length,
+  );
+  const found: CollectionRef[] = [];
+  await Promise.all(
+    candidates.map(async (bucket) => {
+      const uuid = bucket.slice(COLLECTION_BUCKET_PREFIX.length).toLowerCase();
+      try {
+        const bytes = await client.getObject(bucket, `Collections/${uuid}/collection.json`);
+        const doc = JSON.parse(new TextDecoder().decode(bytes)) as {
+          nameProperty?: string;
+          organizationProperty?: string;
+        };
+        found.push({
+          key: `${bucket}::${uuid}`,
+          bucket,
+          uuid,
+          name: doc.nameProperty?.trim() || null,
+          organization: doc.organizationProperty?.trim() || null,
+        });
+      } catch {
+        // No marker, or unreadable / CORS-blocked. Keep probing.
+      }
+    }),
+  );
+  // Sort by display name so pickers read alphabetically; fall back to bucket,
+  // then uuid as a stable tiebreak.
+  return found.sort(
+    (a, b) => (a.name ?? a.bucket).localeCompare(b.name ?? b.bucket) || a.uuid.localeCompare(b.uuid),
+  );
+}
+
+export function parseCollectionKey(key: string): { bucket: string; uuid: string } {
+  const [bucket, uuid] = key.split('::');
+  return { bucket, uuid };
 }

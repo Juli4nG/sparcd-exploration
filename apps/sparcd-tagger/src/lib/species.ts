@@ -13,7 +13,7 @@
 // pinned here from the tool that writes the file.
 
 import type { S3Config } from '@sparcd/types';
-import { getClient, translateS3Error } from './s3';
+import { getClient, translateReadError } from './s3';
 
 export const SPECIES_KEY = 'Settings/species.json';
 
@@ -151,7 +151,7 @@ export async function fetchSpecies(cfg: S3Config): Promise<SpeciesResult> {
   try {
     bytes = await client.getObject(settingsBucket, SPECIES_KEY);
   } catch (err) {
-    throw translateS3Error(err, `"${SPECIES_KEY}"`);
+    throw translateReadError(err, `"${SPECIES_KEY}"`);
   }
   return { ...parseSpecies(new TextDecoder().decode(bytes)), settingsBucket };
 }
