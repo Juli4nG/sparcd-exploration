@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { S3Config } from '@sparcd/types';
 import type { ScannedFile } from './lib/scanFiles';
 import type { ProcessResponse } from './lib/processPool';
@@ -69,132 +70,148 @@ type UploaderState = {
 
 const toEntry = (f: ScannedFile): FileEntry => ({ ...f, processState: 'queued' });
 
-export const useStore = create<UploaderState>((set) => ({
-  s3Config: null,
-  connectionId: 0,
-  section: 'new',
-  theme: 'light',
-  step: 'drop',
-  files: [],
-  validations: {},
-  scanning: false,
-  processing: false,
-  batchToken: 0,
-  dirHandle: null,
-  fileAccessMode: 'reselect-required',
-  uploaderUser: '',
-  selectedLocationKey: null,
-  selectedBucket: null,
-  uploadDescription: '',
-  dryRun: true,
-  uploadConcurrency: 8,
-
-  connect: (config) => {
-    clearClientCache();
-    set((s) => ({
-      s3Config: config,
-      connectionId: s.connectionId + 1,
-      selectedLocationKey: null,
-      selectedBucket: null,
-    }));
-  },
-  disconnect: () => {
-    clearClientCache();
-    set((s) => ({
+export const useStore = create<UploaderState>()(
+  // Persist only the connection + cheap UI prefs, in sessionStorage: the login
+  // survives an HMR/Cmd-R reload within the tab but is dropped when the tab
+  // closes, so a fresh tab starts at the connect gate and the S3 secret key
+  // never lands on disk. The in-flight batch (files, handles, validations) is
+  // deliberately not persisted — see `partialize`.
+  persist(
+    (set) => ({
       s3Config: null,
-      connectionId: s.connectionId + 1,
+      connectionId: 0,
       section: 'new',
+      theme: 'light',
       step: 'drop',
       files: [],
       validations: {},
+      scanning: false,
+      processing: false,
+      batchToken: 0,
       dirHandle: null,
       fileAccessMode: 'reselect-required',
+      uploaderUser: '',
       selectedLocationKey: null,
       selectedBucket: null,
-    }));
-  },
-  setSection: (section) => set({ section }),
-  toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
-  setStep: (step) => set({ step }),
-  setScanning: (scanning) => set({ scanning }),
-  setProcessing: (processing) => set({ processing }),
+      uploadDescription: '',
+      dryRun: true,
+      uploadConcurrency: 8,
 
-  // De-dupe by relPath; a re-scan replaces the batch wholesale and bumps the
-  // token so the processing controller starts a fresh run.
-  setFiles: (scanned, dirHandle = null) => {
-    const seen = new Set<string>();
-    const entries = scanned
-      .filter((f) => (seen.has(f.id) ? false : (seen.add(f.id), true)))
-      .map(toEntry);
-    set((s) => ({
-      files: entries,
-      validations: validateBatch(entries),
-      step: entries.length > 0 ? 'inspect' : 'drop',
-      batchToken: s.batchToken + 1,
-      dirHandle,
-      fileAccessMode: dirHandle ? 'persistent-handle' : 'reselect-required',
-    }));
-  },
+      connect: (config) => {
+        clearClientCache();
+        set((s) => ({
+          s3Config: config,
+          connectionId: s.connectionId + 1,
+          selectedLocationKey: null,
+          selectedBucket: null,
+        }));
+      },
+      disconnect: () => {
+        clearClientCache();
+        set((s) => ({
+          s3Config: null,
+          connectionId: s.connectionId + 1,
+          section: 'new',
+          step: 'drop',
+          files: [],
+          validations: {},
+          dirHandle: null,
+          fileAccessMode: 'reselect-required',
+          selectedLocationKey: null,
+          selectedBucket: null,
+          uploaderUser: '',
+        }));
+      },
+      setSection: (section) => set({ section }),
+      toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
+      setStep: (step) => set({ step }),
+      setScanning: (scanning) => set({ scanning }),
+      setProcessing: (processing) => set({ processing }),
 
-  markProcessing: (id) =>
-    set((s) => ({
-      files: s.files.map((f) => (f.id === id ? { ...f, processState: 'processing' } : f)),
-    })),
+      // De-dupe by relPath; a re-scan replaces the batch wholesale and bumps the
+      // token so the processing controller starts a fresh run.
+      setFiles: (scanned, dirHandle = null) => {
+        const seen = new Set<string>();
+        const entries = scanned
+          .filter((f) => (seen.has(f.id) ? false : (seen.add(f.id), true)))
+          .map(toEntry);
+        set((s) => ({
+          files: entries,
+          validations: validateBatch(entries),
+          step: entries.length > 0 ? 'inspect' : 'drop',
+          batchToken: s.batchToken + 1,
+          dirHandle,
+          fileAccessMode: dirHandle ? 'persistent-handle' : 'reselect-required',
+        }));
+      },
 
-  applyResult: (result) =>
-    set((s) => {
-      const files = s.files.map((f) => {
-        if (f.id !== result.id) return f;
-        if (result.error) return { ...f, processState: 'error' as const, processError: result.error };
-        return {
-          ...f,
-          processState: 'ready' as const,
-          sha256: result.sha256,
-          exifTimestamp: result.exifTimestamp,
-          exifCamera: result.exifCamera,
-          gps: result.gps,
-          width: result.width,
-          height: result.height,
-          thumbnail: result.thumbnail,
-        };
-      });
-      return { files, validations: validateBatch(files) };
+      markProcessing: (id) =>
+        set((s) => ({
+          files: s.files.map((f) => (f.id === id ? { ...f, processState: 'processing' } : f)),
+        })),
+
+      applyResult: (result) =>
+        set((s) => {
+          const files = s.files.map((f) => {
+            if (f.id !== result.id) return f;
+            if (result.error)
+              return { ...f, processState: 'error' as const, processError: result.error };
+            return {
+              ...f,
+              processState: 'ready' as const,
+              sha256: result.sha256,
+              exifTimestamp: result.exifTimestamp,
+              exifCamera: result.exifCamera,
+              gps: result.gps,
+              width: result.width,
+              height: result.height,
+              thumbnail: result.thumbnail,
+            };
+          });
+          return { files, validations: validateBatch(files) };
+        }),
+
+      removeFile: (id) =>
+        set((s) => {
+          const files = s.files.filter((f) => f.id !== id);
+          return { files, validations: validateBatch(files) };
+        }),
+
+      resetBatch: () =>
+        set((s) => ({
+          files: [],
+          validations: {},
+          step: 'drop',
+          batchToken: s.batchToken + 1,
+          dirHandle: null,
+          fileAccessMode: 'reselect-required',
+        })),
+
+      // Stored raw; sanitizeUploaderUser derives the key-safe slug at point of use.
+      setUploaderUser: (value) => set({ uploaderUser: value }),
+      setSelectedLocationKey: (key) => set({ selectedLocationKey: key }),
+      setSelectedBucket: (bucket) => set({ selectedBucket: bucket }),
+      setUploadDescription: (value) => set({ uploadDescription: value }),
+      setDryRun: (value) => set({ dryRun: value }),
+      setUploadConcurrency: (value) => set({ uploadConcurrency: value }),
+
+      // Start a fresh batch after a completed upload, keeping the deployment,
+      // uploader, target collection, and description so a researcher can chain
+      // batches for the same site without re-entering everything.
+      nextBatch: () =>
+        set((s) => ({
+          files: [],
+          validations: {},
+          step: 'drop',
+          batchToken: s.batchToken + 1,
+          dirHandle: null,
+          fileAccessMode: 'reselect-required',
+        })),
     }),
-
-  removeFile: (id) =>
-    set((s) => {
-      const files = s.files.filter((f) => f.id !== id);
-      return { files, validations: validateBatch(files) };
-    }),
-
-  resetBatch: () =>
-    set((s) => ({
-      files: [],
-      validations: {},
-      step: 'drop',
-      batchToken: s.batchToken + 1,
-      dirHandle: null,
-      fileAccessMode: 'reselect-required',
-    })),
-
-  // Stored raw; sanitizeUploaderUser derives the key-safe slug at point of use.
-  setUploaderUser: (value) => set({ uploaderUser: value }),
-  setSelectedLocationKey: (key) => set({ selectedLocationKey: key }),
-  setSelectedBucket: (bucket) => set({ selectedBucket: bucket }),
-  setUploadDescription: (value) => set({ uploadDescription: value }),
-  setDryRun: (value) => set({ dryRun: value }),
-  setUploadConcurrency: (value) => set({ uploadConcurrency: value }),
-
-  // Start a fresh batch after a completed upload, keeping the deployment,
-  // uploader, target collection, and description so a researcher can chain
-  // batches for the same site without re-entering everything.
-  nextBatch: () =>
-    set((s) => ({
-      files: [],
-      validations: {},
-      step: 'drop',
-      batchToken: s.batchToken + 1,
-      dirHandle: null,
-      fileAccessMode: 'reselect-required',
-    })),
-}));
+    {
+      name: 'sparcd-uploader-session',
+      storage: createJSONStorage(() => sessionStorage),
+      partialize: (s) => ({ s3Config: s.s3Config, theme: s.theme }),
+    },
+  ),
+);

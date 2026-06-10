@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import { useStore } from '../store';
+import { listDirtyDrafts } from '../lib/db';
+import { resetLocalState } from '../lib/reset';
 
 const kicker = 'font-body text-[11px] font-[600] tracking-[0.16em] uppercase text-inkSoft mb-1.5';
 const input =
@@ -17,6 +20,25 @@ export function Settings() {
   const setBurst = useStore((s) => s.setBurstThreshold);
   const cfg = useStore((s) => s.s3Config);
   const disconnect = useStore((s) => s.disconnect);
+  const setSection = useStore((s) => s.setSection);
+
+  // Logout clears all local data so the next user gets a clean app. Guard it:
+  // if there are unsynced drafts, hold the count here and confirm before wiping.
+  const [pendingDirty, setPendingDirty] = useState<number | null>(null);
+
+  async function logout() {
+    const dirty = await listDirtyDrafts();
+    if (dirty.length > 0) {
+      setPendingDirty(dirty.length);
+      return;
+    }
+    await wipeAndLogout();
+  }
+
+  async function wipeAndLogout() {
+    disconnect(); // nulls the (sessionStorage-persisted) connection first
+    await resetLocalState(); // clears IndexedDB + keybindings, then reloads to the gate
+  }
 
   return (
     <div className="max-w-[560px] mx-auto p-8 space-y-8">
@@ -98,12 +120,59 @@ export function Settings() {
         <span className={kicker}>Connection</span>
         <p className="text-[13px] font-mono text-inkSoft break-all">{cfg?.endpoint}</p>
         <button
-          onClick={disconnect}
+          onClick={() => void logout()}
           className="mt-3 text-[14px] border border-ink px-3 py-1.5 text-ink hover:bg-panelHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           Disconnect
         </button>
+        <p className="mt-2 text-[13px] text-inkMute font-body">
+          Clears this browser's local drafts and settings so the next person connects to a clean
+          app.
+        </p>
       </section>
+
+      {pendingDirty !== null && (
+        <div className="fixed inset-0 z-50 bg-ink/40 grid place-items-center p-4">
+          <div className="w-[440px] bg-paper border border-ink shadow-xl">
+            <header className="border-b border-rule px-5 h-12 flex items-center">
+              <h2 className="font-display text-[18px] text-ink">Unsynced local edits</h2>
+            </header>
+            <div className="px-5 py-4 space-y-3 text-[14px] text-ink font-body">
+              <p>
+                You have <span className="font-mono">{pendingDirty}</span> unsynced tag
+                {pendingDirty === 1 ? '' : 's'} in this browser. Disconnecting clears all local data
+                on this machine — those edits would be lost.
+              </p>
+              <p className="text-inkSoft text-[13px]">
+                Sync them to S3 first (open the upload from History), or discard them and disconnect.
+              </p>
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-rule px-5 py-3">
+              <button
+                onClick={() => setPendingDirty(null)}
+                className="text-[13px] border border-rule px-3 py-1.5 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setPendingDirty(null);
+                  setSection('history');
+                }}
+                className="text-[13px] border border-ink bg-ink text-paper px-3 py-1.5 hover:bg-inkSoft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Review unsynced
+              </button>
+              <button
+                onClick={() => void wipeAndLogout()}
+                className="text-[13px] border border-warn text-warn px-3 py-1.5 hover:bg-warn hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Discard &amp; disconnect
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

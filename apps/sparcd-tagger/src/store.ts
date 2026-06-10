@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { S3Config } from '@sparcd/types';
 import { clearClientCache } from './lib/s3';
 
@@ -52,57 +53,76 @@ type TaggerState = {
   setBurstThreshold: (value: number) => void;
 };
 
-export const useStore = create<TaggerState>((set) => ({
-  s3Config: null,
-  connectionId: 0,
-  section: 'browse',
-  theme: 'light',
-  syncState: 'local-only',
-  selectedCollectionKey: null,
-  selectedUploadPrefix: null,
-  pendingSnapshots: false,
-  taggerUser: '',
-  dryRun: true,
-  burstGroupingEnabled: false,
-  burstThresholdSec: 60,
-
-  connect: (config) => {
-    clearClientCache();
-    set((s) => ({
-      s3Config: config,
-      connectionId: s.connectionId + 1,
-      selectedCollectionKey: null,
-      selectedUploadPrefix: null,
-    }));
-  },
-  disconnect: () => {
-    clearClientCache();
-    set((s) => ({
+export const useStore = create<TaggerState>()(
+  // Persist only the connection + cheap UI prefs, in sessionStorage: the login
+  // survives an HMR/Cmd-R reload within the tab (the daily annoyance) but is
+  // dropped when the tab closes, so a fresh tab starts at the connect gate and
+  // the S3 secret key never lands on disk. Transient state (selection, sync,
+  // pendingSnapshots) is intentionally excluded — see `partialize`.
+  persist(
+    (set) => ({
       s3Config: null,
-      connectionId: s.connectionId + 1,
+      connectionId: 0,
       section: 'browse',
+      theme: 'light',
+      syncState: 'local-only',
       selectedCollectionKey: null,
       selectedUploadPrefix: null,
-    }));
-  },
-  setSection: (section) => set({ section }),
-  toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
-  selectCollection: (key) =>
-    set({ selectedCollectionKey: key, selectedUploadPrefix: null, syncState: 'local-only' }),
-  selectUpload: (prefix) =>
-    set({ selectedUploadPrefix: prefix, section: prefix ? 'tag' : 'browse', syncState: 'local-only' }),
-  openUploadForSnapshots: (collectionKey, uploadPrefix) =>
-    set({
-      selectedCollectionKey: collectionKey,
-      selectedUploadPrefix: uploadPrefix,
-      section: 'tag',
-      syncState: 'local-only',
-      pendingSnapshots: true,
+      pendingSnapshots: false,
+      taggerUser: '',
+      dryRun: true,
+      burstGroupingEnabled: false,
+      burstThresholdSec: 60,
+
+      connect: (config) => {
+        clearClientCache();
+        set((s) => ({
+          s3Config: config,
+          connectionId: s.connectionId + 1,
+          selectedCollectionKey: null,
+          selectedUploadPrefix: null,
+        }));
+      },
+      disconnect: () => {
+        clearClientCache();
+        set((s) => ({
+          s3Config: null,
+          connectionId: s.connectionId + 1,
+          section: 'browse',
+          selectedCollectionKey: null,
+          selectedUploadPrefix: null,
+          taggerUser: '',
+        }));
+      },
+      setSection: (section) => set({ section }),
+      toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
+      selectCollection: (key) =>
+        set({ selectedCollectionKey: key, selectedUploadPrefix: null, syncState: 'local-only' }),
+      selectUpload: (prefix) =>
+        set({
+          selectedUploadPrefix: prefix,
+          section: prefix ? 'tag' : 'browse',
+          syncState: 'local-only',
+        }),
+      openUploadForSnapshots: (collectionKey, uploadPrefix) =>
+        set({
+          selectedCollectionKey: collectionKey,
+          selectedUploadPrefix: uploadPrefix,
+          section: 'tag',
+          syncState: 'local-only',
+          pendingSnapshots: true,
+        }),
+      clearPendingSnapshots: () => set({ pendingSnapshots: false }),
+      setSyncState: (state) => set({ syncState: state }),
+      setTaggerUser: (value) => set({ taggerUser: value }),
+      setDryRun: (value) => set({ dryRun: value }),
+      setBurstGrouping: (value) => set({ burstGroupingEnabled: value }),
+      setBurstThreshold: (value) => set({ burstThresholdSec: value }),
     }),
-  clearPendingSnapshots: () => set({ pendingSnapshots: false }),
-  setSyncState: (state) => set({ syncState: state }),
-  setTaggerUser: (value) => set({ taggerUser: value }),
-  setDryRun: (value) => set({ dryRun: value }),
-  setBurstGrouping: (value) => set({ burstGroupingEnabled: value }),
-  setBurstThreshold: (value) => set({ burstThresholdSec: value }),
-}));
+    {
+      name: 'sparcd-tagger-session',
+      storage: createJSONStorage(() => sessionStorage),
+      partialize: (s) => ({ s3Config: s.s3Config, theme: s.theme }),
+    },
+  ),
+);
