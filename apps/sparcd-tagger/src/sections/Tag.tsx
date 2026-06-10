@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { useStore } from '../store';
@@ -458,7 +459,7 @@ function FocusPane({
 }) {
   return (
     <div className="flex flex-col min-h-0 bg-paper">
-      <div className="flex-1 min-h-0 grid place-items-center p-4 overflow-hidden">
+      <div className="relative flex-1 min-h-0 grid place-items-center p-4 overflow-hidden">
         {current && <FocusImage objectKey={current.key} alt={current.fileName} />}
       </div>
       {current && eff && (
@@ -561,24 +562,162 @@ function FocusImage({ objectKey, alt }: { objectKey: string; alt: string }) {
   if (isError)
     return <div className="text-[13px] font-mono text-warn">Could not load this image.</div>;
   if (!data) return <div className="text-[13px] font-mono text-inkMute">…</div>;
+  return <ZoomableImage src={data} alt={alt} resetKey={objectKey} />;
+}
+
+const ZOOM_PROPS = {
+  minScale: 1,
+  maxScale: 6,
+  centerOnInit: true,
+  centerZoomedOut: true,
+  limitToBounds: true,
+  wheel: { step: 0.2 },
+  doubleClick: { mode: 'zoomIn' as const, step: 0.7 },
+  panning: { velocityDisabled: true },
+};
+
+function ZoomableImage({ src, alt, resetKey }: { src: string; alt: string; resetKey: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
   return (
-    // key forces a fresh fit-to-view (reset zoom/pan) on every image change
-    <TransformWrapper
-      key={objectKey}
-      minScale={0.8}
-      maxScale={8}
-      centerOnInit
-      wheel={{ step: 0.15 }}
-      doubleClick={{ mode: 'zoomIn', step: 0.7 }}
-      limitToBounds
-    >
-      <TransformComponent
-        wrapperClass="!w-full !h-full cursor-grab active:cursor-grabbing"
-        contentClass="!w-full !h-full"
+    <>
+      {/* key forces a fresh fit-to-view (reset zoom/pan) on every image change */}
+      <TransformWrapper
+        key={resetKey}
+        {...ZOOM_PROPS}
+        onTransform={(_, s) => setZoomed(s.scale > 1.01)}
       >
-        <img src={data} alt={alt} className="max-w-full max-h-full object-contain" />
-      </TransformComponent>
-    </TransformWrapper>
+        {({ zoomIn, zoomOut, resetTransform }) => (
+          <>
+            <TransformComponent
+              wrapperClass="!w-full !h-full cursor-grab active:cursor-grabbing"
+              contentClass="!w-full !h-full"
+            >
+              <img
+                src={src}
+                alt={alt}
+                draggable={false}
+                className="w-full h-full object-contain select-none"
+              />
+            </TransformComponent>
+            <ZoomControls
+              onIn={() => zoomIn()}
+              onOut={() => zoomOut()}
+              onExpand={() => setExpanded(true)}
+              onReset={zoomed ? () => resetTransform() : undefined}
+            />
+          </>
+        )}
+      </TransformWrapper>
+      {expanded && <Lightbox src={src} alt={alt} onClose={() => setExpanded(false)} />}
+    </>
+  );
+}
+
+function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  const [zoomed, setZoomed] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-ink/90 grid grid-rows-[auto_minmax(0,1fr)]">
+      <div className="flex items-center justify-between px-4 py-2">
+        <span className="text-[13px] font-mono text-paper/80 truncate">{alt}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-8 h-8 grid place-items-center text-[18px] leading-none text-paper/80 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          title="Close (Esc)"
+          aria-label="Close"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="relative min-h-0" onClick={(e) => e.target === e.currentTarget && onClose()}>
+        <TransformWrapper {...ZOOM_PROPS} maxScale={10} onTransform={(_, s) => setZoomed(s.scale > 1.01)}>
+          {({ zoomIn, zoomOut, resetTransform }) => (
+            <>
+              <TransformComponent
+                wrapperClass="!w-full !h-full cursor-grab active:cursor-grabbing"
+                contentClass="!w-full !h-full"
+              >
+                <img
+                  src={src}
+                  alt={alt}
+                  draggable={false}
+                  className="w-full h-full object-contain select-none"
+                />
+              </TransformComponent>
+              <ZoomControls
+                onIn={() => zoomIn()}
+                onOut={() => zoomOut()}
+                onReset={zoomed ? () => resetTransform() : undefined}
+                dark
+              />
+            </>
+          )}
+        </TransformWrapper>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function ZoomControls({
+  onIn,
+  onOut,
+  onExpand,
+  onReset,
+  dark,
+}: {
+  onIn: () => void;
+  onOut: () => void;
+  onExpand?: () => void;
+  onReset?: () => void;
+  dark?: boolean;
+}) {
+  const tone = dark
+    ? 'text-paper/80 hover:text-paper hover:bg-paper/10'
+    : 'text-inkSoft hover:text-ink hover:bg-paper';
+  const surface = dark
+    ? 'bg-ink/60 border-paper/20 divide-paper/20'
+    : 'bg-panel/90 border-rule divide-rule';
+  const btn = `w-8 h-8 grid place-items-center text-[15px] leading-none ${tone} focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`;
+  return (
+    <div className="absolute bottom-4 right-4 flex flex-col items-end gap-2">
+      {onReset && (
+        <button
+          type="button"
+          onClick={onReset}
+          className={`flex items-center gap-1.5 px-3 h-8 border shadow-sm text-[13px] font-mono ${surface} ${tone} focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`}
+          title="Reset to fit"
+        >
+          ⤢ Reset
+        </button>
+      )}
+      <div className={`flex flex-col border divide-y shadow-sm ${surface}`}>
+        <button type="button" onClick={onIn} className={btn} title="Zoom in" aria-label="Zoom in">
+          +
+        </button>
+        <button type="button" onClick={onOut} className={btn} title="Zoom out" aria-label="Zoom out">
+          −
+        </button>
+        {onExpand && (
+          <button
+            type="button"
+            onClick={onExpand}
+            className={`${btn} text-[12px]`}
+            title="Open fullscreen"
+            aria-label="Open fullscreen"
+          >
+            ⤢
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
