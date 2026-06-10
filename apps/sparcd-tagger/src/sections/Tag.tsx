@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { useStore } from '../store';
 import { useTagImages, useSpecies } from '../lib/queries';
 import { parseCollectionKey, presignImage } from '../lib/s3';
@@ -365,7 +366,7 @@ export function Tag() {
             <SpeciesPanel {...speciesPanelProps()} />
           </div>
         ) : (
-          <div className="h-full grid grid-cols-[280px_1fr_340px] min-h-0">
+          <div className="h-full grid grid-cols-[280px_1fr_340px] grid-rows-[minmax(0,1fr)] min-h-0">
             <Overview
               list={list}
               grouping={grouping}
@@ -560,7 +561,25 @@ function FocusImage({ objectKey, alt }: { objectKey: string; alt: string }) {
   if (isError)
     return <div className="text-[13px] font-mono text-warn">Could not load this image.</div>;
   if (!data) return <div className="text-[13px] font-mono text-inkMute">…</div>;
-  return <img src={data} alt={alt} className="max-w-full max-h-full object-contain" />;
+  return (
+    // key forces a fresh fit-to-view (reset zoom/pan) on every image change
+    <TransformWrapper
+      key={objectKey}
+      minScale={0.8}
+      maxScale={8}
+      centerOnInit
+      wheel={{ step: 0.15 }}
+      doubleClick={{ mode: 'zoomIn', step: 0.7 }}
+      limitToBounds
+    >
+      <TransformComponent
+        wrapperClass="!w-full !h-full cursor-grab active:cursor-grabbing"
+        contentClass="!w-full !h-full"
+      >
+        <img src={data} alt={alt} className="max-w-full max-h-full object-contain" />
+      </TransformComponent>
+    </TransformWrapper>
+  );
 }
 
 function Centered({ children, tone }: { children: React.ReactNode; tone?: 'warn' }) {
