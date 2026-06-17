@@ -14,6 +14,7 @@ import {
   parseDeployments,
   validateCoordinates,
 } from '@sparcd/camtrap';
+import { restampDeployment } from '../src/lib/publishedEdit';
 
 const raw = (over: Partial<RawLocation>): RawLocation => ({
   nameProperty: 'San Pedro 15',
@@ -89,4 +90,25 @@ describe('locationToDeployment → shared camtrap serializer', () => {
     expect(back.latitude).toBeCloseTo(31.5, 5);
     expect(validateCoordinates(back.latitude, back.longitude)).toBeNull();
   });
+
+  it('restampDeployment builds toDeploymentId via locationToDeployment and round-trips', () => {
+    const uuid = '8dbd9c43-5c3d-411d-8778-617d4693c69b';
+    const { locations } = parseLocations(doc([raw({ idProperty: 'SAN20', nameProperty: 'San Pedro 20' })]));
+    const target = locationToDeployment(locations[0], uuid);
+    expect(target.deploymentId).toBe(`${uuid}:SAN20`);
+
+    const next = restampDeployment(
+      { deployments: serializeDeployments([locationToDeployment(raw15(uuid), uuid)]), media: '', observations: '' },
+      { fromDeploymentId: `${uuid}:SAN15`, toDeploymentId: target.deploymentId, location: target },
+    );
+    const [back] = parseDeployments(next.deployments);
+    expect(back.deploymentId).toBe(`${uuid}:SAN20`);
+    expect(back.locationId).toBe('SAN20');
+  });
 });
+
+// A SAN15 location parsed to a Deployment, for the restamp source row.
+function raw15(_uuid: string) {
+  const { locations } = parseLocations(JSON.stringify([raw({})]));
+  return locations[0];
+}

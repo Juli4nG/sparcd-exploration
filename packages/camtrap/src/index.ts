@@ -101,9 +101,14 @@ export function serializeDeployments(deployments: Deployment[]): string {
 /**
  * Serialize `media.csv` (one row per image), v016 11-column shape. The full S3
  * object key is repeated in the media_id / sequence_id / file_path positions,
- * matching SPARC'd's own writer. The timestamp column (4) is left empty on
- * initial upload exactly as the canonical writer leaves it — per-image
- * timestamps enter later via the tagger, not here.
+ * matching SPARC'd's own writer.
+ *
+ * Col 4 carries `m.timestamp` verbatim — the uploader is the writer-of-record
+ * for capture time and stamps the DST-corrected naive wall-clock
+ * (`YYYY-MM-DDTHH:mm:ss`) here, the exact byte shape the Java app, sparcd-web,
+ * the explorer, and the tagger all read. It is empty only when capture time is
+ * genuinely absent (e.g. a video without container metadata, routed to manual
+ * entry). The tagger still merges later per-image corrections via `mergeMedia`.
  */
 export function serializeMedia(media: Media[]): string {
   return media
@@ -113,7 +118,7 @@ export function serializeMedia(media: Media[]): string {
         m.deploymentId, // 1  deployment_id
         m.mediaPath, // 2  sequence_id (= full key)
         '', // 3  capture_method
-        '', // 4  timestamp (empty on initial upload)
+        m.timestamp, // 4  timestamp (naive wall-clock, DST-corrected by the uploader)
         m.mediaPath, // 5  file_path (= full key)
         m.fileName, // 6  file_name
         m.mimeType, // 7  file_media_type

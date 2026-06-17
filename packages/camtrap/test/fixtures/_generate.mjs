@@ -133,12 +133,16 @@ writeFileSync(join(webDir, 'observations.csv'), csv(canonicalObs));
 writeFileSync(join(webDir, 'UploadMeta.json'),
   json(uploadMeta(3, ['Uploaded by priortagger on 2024.01.15.10.00.00'])));
 
-// --- uploader-empty-v016 (fresh upload: empty observations, blank timestamps) -
+// --- uploader-empty-v016 (fresh upload: empty observations) ----------------
+//
+// "empty" refers to observations.csv. media.csv now carries the per-image
+// capture timestamp in col 4: the uploader is the writer-of-record for capture
+// time and stamps the DST-corrected naive wall-clock at upload (matching the
+// java-v016 media shape). Only observations are written empty on a fresh upload.
 
 const upDir = join(here, 'uploader-empty-v016');
-const mediaEmpty = mediaBase.map((r) => { const c = r.slice(); c[4] = ''; return c; });
 writeFileSync(join(upDir, 'deployments.csv'), deployments);
-writeFileSync(join(upDir, 'media.csv'), csv(mediaEmpty));
+writeFileSync(join(upDir, 'media.csv'), csv(mediaBase));
 writeFileSync(join(upDir, 'observations.csv'), ''); // always written empty on upload
 writeFileSync(join(upDir, 'UploadMeta.json'), json(uploadMeta(0, [])));
 

@@ -58,7 +58,7 @@ export function DropZone() {
       <div
         role="button"
         tabIndex={0}
-        aria-label="Drop a folder of JPEGs, or choose a folder"
+        aria-label="Drop a folder of JPEGs or MP4 videos, or choose a folder"
         onClick={() => void chooseFolder()}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -84,11 +84,12 @@ export function DropZone() {
           <p className="font-body text-[15px] text-inkSoft">Scanning folder…</p>
         ) : noneFound ? (
           <>
-            <p className="font-display text-[20px] text-warn mb-1">No JPEGs in that folder</p>
+            <p className="font-display text-[20px] text-warn mb-1">No images or videos in that folder</p>
             <p className="font-body text-[14px] text-inkSoft mb-5">
               The folder was read but held no <span className="font-mono">.jpg</span>/
-              <span className="font-mono">.jpeg</span> files. This tool uploads JPEG only — convert
-              PNGs first, then choose the folder again.
+              <span className="font-mono">.jpeg</span>/<span className="font-mono">.mp4</span> files.
+              This tool uploads JPEG and MP4 — convert other formats first, then choose the folder
+              again.
             </p>
             <span className="inline-block bg-ink text-paper border border-ink px-4 py-2 text-[14px] font-body font-[600]">
               Choose another folder
@@ -96,9 +97,9 @@ export function DropZone() {
           </>
         ) : (
           <>
-            <p className="font-display text-[20px] text-ink mb-1">Drop a folder of images</p>
+            <p className="font-display text-[20px] text-ink mb-1">Drop a folder of media</p>
             <p className="font-body text-[14px] text-inkSoft mb-5">
-              JPEG only. Subfolders are scanned recursively.
+              JPEG and MP4. Subfolders are scanned recursively.
             </p>
             <span className="inline-block bg-ink text-paper border border-ink px-4 py-2 text-[14px] font-body font-[600]">
               Choose folder

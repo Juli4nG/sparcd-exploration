@@ -6,6 +6,7 @@ import type { ProcessResponse } from './lib/processPool';
 import type { FileAccessMode } from './lib/db';
 import { validateBatch, type FileValidation } from './lib/validation';
 import { clearClientCache } from './lib/s3';
+import { localTimeZone, type NaiveDateTime } from './lib/exifTime';
 
 export type Section = 'new' | 'history' | 'settings';
 export type WizardStep = 'drop' | 'inspect' | 'assign' | 'upload';
@@ -16,12 +17,13 @@ export type ProcessState = 'queued' | 'processing' | 'ready' | 'error';
 export type FileEntry = ScannedFile & {
   processState: ProcessState;
   sha256?: string;
-  exifTimestamp?: string; // ISO 8601
+  exifNaive?: NaiveDateTime; // naive wall-clock components, no zone
   exifCamera?: string;
   gps?: { lat: number; lon: number };
   width?: number;
   height?: number;
   thumbnail?: Blob;
+  mimeType?: string; // worker-authoritative media type
   processError?: string;
 };
 
@@ -44,6 +46,7 @@ type UploaderState = {
   selectedLocationKey: string | null; // chosen deployment location key (Assign)
   selectedBucket: string | null; // selected collection key `${bucket}::${uuid}` (Assign)
   uploadDescription: string; // free-text description for UploadMeta
+  uploadTimeZone: string; // IANA zone EXIF naive times are interpreted in; default = browser zone
   dryRun: boolean; // on by default; logs PUTs and writes nothing
   uploadConcurrency: number; // parallel blob lanes, 4–16
 
@@ -57,12 +60,14 @@ type UploaderState = {
   setFiles: (files: ScannedFile[], dirHandle?: FileSystemDirectoryHandle | null) => void;
   markProcessing: (id: string) => void;
   applyResult: (result: ProcessResponse) => void;
+  setThumbnail: (id: string, thumbnail: Blob) => void;
   removeFile: (id: string) => void;
   resetBatch: () => void;
   setUploaderUser: (value: string) => void;
   setSelectedLocationKey: (key: string | null) => void;
   setSelectedBucket: (bucket: string | null) => void;
   setUploadDescription: (value: string) => void;
+  setUploadTimeZone: (value: string) => void;
   setDryRun: (value: boolean) => void;
   setUploadConcurrency: (value: number) => void;
   nextBatch: () => void;
@@ -94,6 +99,7 @@ export const useStore = create<UploaderState>()(
       selectedLocationKey: null,
       selectedBucket: null,
       uploadDescription: '',
+      uploadTimeZone: localTimeZone(),
       dryRun: true,
       uploadConcurrency: 8,
 
@@ -120,6 +126,7 @@ export const useStore = create<UploaderState>()(
           selectedLocationKey: null,
           selectedBucket: null,
           uploaderUser: '',
+          uploadTimeZone: localTimeZone(),
         }));
       },
       setSection: (section) => set({ section }),
@@ -160,16 +167,25 @@ export const useStore = create<UploaderState>()(
               ...f,
               processState: 'ready' as const,
               sha256: result.sha256,
-              exifTimestamp: result.exifTimestamp,
+              exifNaive: result.exifNaive,
               exifCamera: result.exifCamera,
               gps: result.gps,
               width: result.width,
               height: result.height,
               thumbnail: result.thumbnail,
+              mimeType: result.mimeType,
             };
           });
           return { files, validations: validateBatch(files) };
         }),
+
+      // Attach a best-effort poster after the fact (video frames are captured on
+      // the main thread, post-worker). No validation re-run: a poster never
+      // changes a verdict.
+      setThumbnail: (id, thumbnail) =>
+        set((s) => ({
+          files: s.files.map((f) => (f.id === id ? { ...f, thumbnail } : f)),
+        })),
 
       removeFile: (id) =>
         set((s) => {
@@ -192,6 +208,7 @@ export const useStore = create<UploaderState>()(
       setSelectedLocationKey: (key) => set({ selectedLocationKey: key }),
       setSelectedBucket: (bucket) => set({ selectedBucket: bucket }),
       setUploadDescription: (value) => set({ uploadDescription: value }),
+      setUploadTimeZone: (value) => set({ uploadTimeZone: value }),
       setDryRun: (value) => set({ dryRun: value }),
       setUploadConcurrency: (value) => set({ uploadConcurrency: value }),
 

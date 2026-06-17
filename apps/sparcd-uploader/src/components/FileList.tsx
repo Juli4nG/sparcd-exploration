@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useStore, type FileEntry } from '../store';
 import { formatBytes } from '../lib/scanFiles';
+import { formatNaive, type NaiveDateTime } from '../lib/exifTime';
 import type { FileValidation, Severity } from '../lib/validation';
 
 const ROW = 52;
@@ -13,13 +14,14 @@ const SEVERITY_DOT: Record<Severity, string> = {
   error: 'bg-warn',
 };
 
-function shortTime(iso?: string): string {
-  if (!iso) return '—';
-  // Render the EXIF instant without imposing a timezone shift on the display.
-  return iso.replace('T', ' ').replace(/\.\d+Z$/, '').replace(/Z$/, '');
+// Display the naive EXIF wall-clock as-written (no zone shift). The chosen
+// upload zone only affects the stored UTC instant, not this raw display.
+function shortTime(n?: NaiveDateTime): string {
+  if (!n) return '—';
+  return formatNaive(n).replace('T', ' ');
 }
 
-function Thumb({ blob }: { blob?: Blob }) {
+function Thumb({ blob, isVideo }: { blob?: Blob; isVideo: boolean }) {
   const [url, setUrl] = useState<string>();
   useEffect(() => {
     if (!blob) return;
@@ -30,6 +32,17 @@ function Thumb({ blob }: { blob?: Blob }) {
 
   if (url) {
     return <img src={url} alt="" className="w-9 h-9 object-cover border border-ruleSoft" />;
+  }
+  // Typed placeholder: a film-strip glyph for video, a blank tile otherwise.
+  if (isVideo) {
+    return (
+      <span
+        className="w-9 h-9 bg-paperHover border border-ruleSoft grid place-items-center text-inkMute text-[14px]"
+        aria-label="video"
+      >
+        ▦
+      </span>
+    );
   }
   return <span className="w-9 h-9 bg-paperHover border border-ruleSoft block" aria-hidden />;
 }
@@ -63,6 +76,7 @@ function Row({
   onSelect: () => void;
 }) {
   const dims = entry.width && entry.height ? `${entry.width}×${entry.height}` : '—';
+  const isVideo = entry.mediaKind === 'video';
   return (
     <div
       onClick={onSelect}
@@ -70,7 +84,7 @@ function Row({
         active ? 'bg-mark' : 'hover:bg-panelHover'
       }`}
     >
-      <Thumb blob={entry.thumbnail} />
+      <Thumb blob={entry.thumbnail} isVideo={isVideo} />
       <span className="min-w-0">
         <span className="block truncate font-mono text-[13px] text-ink" title={entry.relPath}>
           {entry.fileName}
@@ -79,11 +93,12 @@ function Row({
           className="block truncate font-mono text-[11px] text-inkMute"
           title={entry.sha256 ? `sha256:${entry.sha256}` : undefined}
         >
+          <span className="text-inkSoft mr-1.5">{isVideo ? 'VIDEO' : 'JPEG'}</span>
           {entry.exifCamera ?? (entry.sha256 ? `${entry.sha256.slice(0, 12)}…` : entry.relPath)}
         </span>
       </span>
-      <span className="font-mono text-[12px] text-inkSoft truncate" title={entry.exifTimestamp}>
-        {shortTime(entry.exifTimestamp)}
+      <span className="font-mono text-[12px] text-inkSoft truncate" title={entry.exifNaive ? formatNaive(entry.exifNaive) : undefined}>
+        {shortTime(entry.exifNaive)}
       </span>
       <span className="font-mono text-[12px] text-inkSoft text-right">{dims}</span>
       <span className="font-mono text-[12px] text-inkSoft text-right">{formatBytes(entry.size)}</span>

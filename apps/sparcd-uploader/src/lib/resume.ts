@@ -16,6 +16,7 @@ import {
   scanDirectoryHandle,
   scanFileList,
   supportsDirectoryHandle,
+  type MediaKind,
   type ScannedFile,
 } from './scanFiles';
 import { processBatch } from './processPool';
@@ -55,7 +56,7 @@ export async function restoreFromHandle(batch: BatchRecord): Promise<RestoreResu
 }
 
 // Hash a set of files through the existing worker pool, returning relPath → digest.
-function hashAll(items: { id: string; file: File }[]): Promise<Map<string, string>> {
+function hashAll(items: { id: string; file: File; fileKind: MediaKind }[]): Promise<Map<string, string>> {
   return new Promise((resolve) => {
     const out = new Map<string, string>();
     if (items.length === 0) {
@@ -85,7 +86,7 @@ export async function reconcileReselect(
 ): Promise<{ attached: Map<string, File>; problems: ReconcileProblem[] }> {
   const byPath = new Map(scanned.map((f) => [f.relPath, f]));
   const problems: ReconcileProblem[] = [];
-  const candidates: { record: FileRecord; file: File }[] = [];
+  const candidates: { record: FileRecord; file: File; mediaKind: MediaKind }[] = [];
 
   for (const rec of records) {
     const sf = byPath.get(rec.localPath);
@@ -101,10 +102,12 @@ export async function reconcileReselect(
       });
       continue;
     }
-    candidates.push({ record: rec, file: sf.file });
+    candidates.push({ record: rec, file: sf.file, mediaKind: sf.mediaKind });
   }
 
-  const hashes = await hashAll(candidates.map((c) => ({ id: c.record.localPath, file: c.file })));
+  const hashes = await hashAll(
+    candidates.map((c) => ({ id: c.record.localPath, file: c.file, fileKind: c.mediaKind })),
+  );
 
   const attached = new Map<string, File>();
   for (const c of candidates) {

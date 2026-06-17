@@ -25,6 +25,7 @@ import {
 import { scanFileList, supportsDirectoryHandle } from '../lib/scanFiles';
 import { resumeUpload, type UploadRun, type UploadSnapshot } from '../lib/upload';
 import { Note, RunMonitor } from '../components/RunMonitor';
+import { PublishedUploads } from '../components/PublishedUploads';
 
 type Row = { batch: BatchRecord; counts: Record<PersistedFileState, number> };
 
@@ -189,14 +190,15 @@ export function History() {
 
   if (rows.length === 0) {
     return (
-      <div className="px-6 py-6">
-        <div className="max-w-2xl mx-auto border border-ruleSoft bg-panel px-6 py-12 text-center">
+      <div className="px-6 py-6 max-w-2xl mx-auto space-y-8">
+        <div className="border border-ruleSoft bg-panel px-6 py-12 text-center">
           <p className="font-display text-[18px] text-ink mb-1">No uploads yet</p>
           <p className="font-body text-[14px] text-inkSoft">
             Wet uploads are tracked here for resume — date, collection, deployment, file count, and
             status. Dry runs write nothing, so they are not recorded.
           </p>
         </div>
+        <PublishedUploads />
       </div>
     );
   }
@@ -317,6 +319,10 @@ export function History() {
           );
         })}
       </ul>
+
+      <div className="pt-3 border-t border-ruleSoft">
+        <PublishedUploads />
+      </div>
     </div>
   );
 }

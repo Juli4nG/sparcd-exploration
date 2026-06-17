@@ -1,7 +1,9 @@
 // Recursive folder scan for both entry points: drag-drop (DataTransferItem +
 // webkitGetAsEntry) and the "Choose folder" picker (<input webkitdirectory>).
-// Produces a flat list of JPEGs with their bundle-relative paths. EXIF, hash,
-// thumbnail, and validation are P1 — P0 surfaces filename + size only.
+// Produces a flat list of JPEGs and MP4 videos with their bundle-relative paths.
+// EXIF, hash, thumbnail, and validation are P1 — P0 surfaces filename + size only.
+
+export type MediaKind = 'image' | 'video';
 
 export type ScannedFile = {
   id: string; // relPath; unique within a scan
@@ -9,11 +11,24 @@ export type ScannedFile = {
   relPath: string; // path within the dropped folder, leading "/" stripped
   fileName: string;
   size: number;
+  mediaKind: MediaKind;
 };
 
 function isJpeg(name: string, type: string): boolean {
   if (type === 'image/jpeg') return true;
   return /\.jpe?g$/i.test(name);
+}
+
+function isVideo(name: string, type: string): boolean {
+  if (type === 'video/mp4') return true;
+  return /\.mp4$/i.test(name);
+}
+
+/** Which media kind this file is, or null when it is neither accepted type. */
+function mediaKindOf(name: string, type: string): MediaKind | null {
+  if (isJpeg(name, type)) return 'image';
+  if (isVideo(name, type)) return 'video';
+  return null;
 }
 
 // A FileSystemDirectoryReader returns entries in batches; keep calling until
@@ -43,9 +58,10 @@ async function walkEntry(entry: FileSystemEntry, acc: ScannedFile[]): Promise<vo
   if (entry.isFile) {
     const fileEntry = entry as FileSystemFileEntry;
     const file = await entryToFile(fileEntry);
-    if (!isJpeg(file.name, file.type)) return;
+    const kind = mediaKindOf(file.name, file.type);
+    if (!kind) return;
     const relPath = entry.fullPath.replace(/^\//, '');
-    acc.push({ id: relPath, file, relPath, fileName: file.name, size: file.size });
+    acc.push({ id: relPath, file, relPath, fileName: file.name, size: file.size, mediaKind: kind });
     return;
   }
   if (entry.isDirectory) {
@@ -107,8 +123,9 @@ export async function scanDirectoryHandle(dir: FileSystemDirectoryHandle): Promi
       const path = `${prefix}/${entry.name}`;
       if (entry.kind === 'file') {
         const file = await entry.getFile();
-        if (!isJpeg(file.name, file.type)) continue;
-        acc.push({ id: path, file, relPath: path, fileName: file.name, size: file.size });
+        const kind = mediaKindOf(file.name, file.type);
+        if (!kind) continue;
+        acc.push({ id: path, file, relPath: path, fileName: file.name, size: file.size, mediaKind: kind });
       } else {
         await walk(entry, path);
       }
@@ -123,9 +140,10 @@ export function scanFileList(list: FileList): ScannedFile[] {
   const acc: ScannedFile[] = [];
   for (let i = 0; i < list.length; i++) {
     const file = list[i];
-    if (!isJpeg(file.name, file.type)) continue;
+    const kind = mediaKindOf(file.name, file.type);
+    if (!kind) continue;
     const relPath = (file.webkitRelativePath || file.name).replace(/^\//, '');
-    acc.push({ id: relPath, file, relPath, fileName: file.name, size: file.size });
+    acc.push({ id: relPath, file, relPath, fileName: file.name, size: file.size, mediaKind: kind });
   }
   return acc;
 }

@@ -3,6 +3,9 @@
 import { describe, it, expect } from 'vitest';
 import { validateBatch, summarize } from '../src/lib/validation';
 import type { FileEntry } from '../src/store';
+import type { NaiveDateTime } from '../src/lib/exifTime';
+
+const NAIVE: NaiveDateTime = { year: 2024, month: 1, day: 10, hour: 8, minute: 0, second: 0 };
 
 function file(over: Partial<FileEntry>): FileEntry {
   // Default the hash off the id so unrelated files don't accidentally collide
@@ -13,9 +16,10 @@ function file(over: Partial<FileEntry>): FileEntry {
     relPath: 'IMG.JPG',
     fileName: 'IMG.JPG',
     size: 1024,
+    mediaKind: 'image',
     processState: 'ready',
     sha256: `sha-${over.id ?? over.relPath ?? 'IMG'}`,
-    exifTimestamp: '2024-01-10T08:00:00',
+    exifNaive: NAIVE,
     ...over,
   };
 }
@@ -42,9 +46,31 @@ describe('validateBatch severities', () => {
   });
 
   it('errors when a ready file has no EXIF timestamp', () => {
-    const v = validateBatch([file({ id: 'a', relPath: 'a', exifTimestamp: undefined })]);
+    const v = validateBatch([file({ id: 'a', relPath: 'a', exifNaive: undefined })]);
     expect(v['a'].severity).toBe('error');
     expect(v['a'].issues.some((i) => i.message.includes('No EXIF timestamp'))).toBe(true);
+  });
+
+  it('errors when a ready video has no container timestamp (manual-entry path)', () => {
+    const v = validateBatch([
+      file({
+        id: 'a',
+        relPath: 'a/CLIP.MP4',
+        mediaKind: 'video',
+        mimeType: 'video/mp4',
+        exifNaive: undefined,
+      }),
+    ]);
+    expect(v['a'].severity).toBe('error');
+    expect(v['a'].issues.some((i) => i.message.includes('No EXIF timestamp'))).toBe(true);
+  });
+
+  it('a ready video with a container timestamp is ok', () => {
+    const v = validateBatch([
+      file({ id: 'a', relPath: 'a/CLIP.MP4', mediaKind: 'video', mimeType: 'video/mp4' }),
+    ]);
+    expect(v['a'].severity).toBe('ok');
+    expect(v['a'].issues).toEqual([]);
   });
 
   it('warns (not blocks) on an oversized file', () => {

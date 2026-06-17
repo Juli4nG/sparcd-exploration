@@ -33,29 +33,53 @@ const SAN15: Location = {
   elevation: 1200,
 };
 
+import type { NaiveDateTime } from '../src/lib/exifTime';
+
+// A naive wall-clock with no zone (the camera's local time, as EXIF stores it).
+const naive = (over: Partial<NaiveDateTime> = {}): NaiveDateTime => ({
+  year: 2024,
+  month: 1,
+  day: 10,
+  hour: 8,
+  minute: 0,
+  second: 0,
+  ...over,
+});
+
 // A ready FileEntry backed by a real File so `crypto.subtle` has bytes to hash.
-function ready(relPath: string, exifTimestamp?: string): FileEntry {
-  const bytes = new TextEncoder().encode(`fake-jpeg:${relPath}`);
-  const file = new File([bytes], relPath.split('/').pop()!, { type: 'image/jpeg' });
+function ready(
+  relPath: string,
+  opts: { exifNaive?: NaiveDateTime; mediaKind?: FileEntry['mediaKind'] } = {},
+): FileEntry {
+  const mediaKind = opts.mediaKind ?? 'image';
+  const mimeType = mediaKind === 'video' ? 'video/mp4' : 'image/jpeg';
+  const bytes = new TextEncoder().encode(`fake:${relPath}`);
+  const file = new File([bytes], relPath.split('/').pop()!, { type: mimeType });
   return {
     id: relPath,
     file,
     relPath,
     fileName: file.name,
     size: bytes.length,
+    mediaKind,
+    mimeType,
     processState: 'ready',
     sha256: `sha-${relPath}`,
-    exifTimestamp,
+    exifNaive: 'exifNaive' in opts ? opts.exifNaive : naive(),
   };
 }
 
-function build(files: FileEntry[]): ReturnType<typeof buildBundle> {
+function build(
+  files: FileEntry[],
+  timeZone = 'America/Phoenix',
+): ReturnType<typeof buildBundle> {
   const input: BuildInput = {
     location: SAN15,
     collectionUuid: UUID,
     bucket: `sparcd-${UUID}`,
     uploaderSlug: 'jdoe',
     description: 'Educational Test — uploader bundle',
+    timeZone,
     files,
     now: new Date(2024, 0, 15, 10, 0, 0),
   };
@@ -64,17 +88,39 @@ function build(files: FileEntry[]): ReturnType<typeof buildBundle> {
 
 describe('uploader bundle is valid v016 Camtrap data', () => {
   it('writes an empty observations.csv base — the tagger golden', async () => {
-    const b = await build([ready('a/IMG001.JPG', '2024-01-10T08:00:00')]);
+    const b = await build([ready('a/IMG001.JPG', { exifNaive: naive() })]);
     expect(b.observationsCsv).toBe('');
     expect(b.observationsCsv).toBe(fixture('uploader-empty-v016', 'observations.csv'));
     expect(parseObservations(b.observationsCsv)).toEqual([]);
   });
 
-  it('media.csv leaves capture timestamps blank for the tagger to fill', async () => {
-    // EXIF is captured on the FileEntry, but the canonical writer leaves col 4
-    // empty on initial upload — the tagger owns per-image capture time.
-    const b = await build([ready('a/IMG001.JPG', '2024-01-10T08:00:00')]);
-    for (const m of parseMedia(b.mediaCsv)) expect(m.timestamp).toBe('');
+  it('media.csv carries the DST-corrected naive capture time in col 4', async () => {
+    // The uploader is the writer-of-record for capture time: the naive EXIF
+    // wall-clock 08:00 interpreted in America/Phoenix (UTC-7, no DST) is 15:00Z,
+    // written as a naive-UTC string (no `Z`) — the exact byte shape readers want.
+    const b = await build([ready('a/IMG001.JPG', { exifNaive: naive({ hour: 8 }) })], 'America/Phoenix');
+    const rows = parseMedia(b.mediaCsv);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].timestamp).toBe('2024-01-10T15:00:00');
+  });
+
+  it('capture time is independent of the chosen zone going in (proves tz applied)', async () => {
+    // Same naive wall-clock, two different zones → two different UTC instants.
+    const phx = await build([ready('a/IMG001.JPG', { exifNaive: naive({ hour: 8 }) })], 'America/Phoenix');
+    const utc = await build([ready('a/IMG001.JPG', { exifNaive: naive({ hour: 8 }) })], 'UTC');
+    expect(parseMedia(phx.mediaCsv)[0].timestamp).toBe('2024-01-10T15:00:00');
+    expect(parseMedia(utc.mediaCsv)[0].timestamp).toBe('2024-01-10T08:00:00');
+  });
+
+  it('a video media row carries the video media type', async () => {
+    const b = await build([ready('a/CLIP.MP4', { mediaKind: 'video', exifNaive: naive() })]);
+    const rows = parseMedia(b.mediaCsv);
+    expect(rows[0].mimeType).toBe('video/mp4');
+  });
+
+  it('a file with no capture time leaves col 4 empty', async () => {
+    const b = await build([ready('a/CLIP.MP4', { mediaKind: 'video', exifNaive: undefined })]);
+    expect(parseMedia(b.mediaCsv)[0].timestamp).toBe('');
   });
 
   it('media rows carry the full object key as media_id and round-trip', async () => {

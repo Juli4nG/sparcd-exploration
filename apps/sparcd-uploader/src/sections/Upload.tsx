@@ -16,6 +16,7 @@ export function Upload() {
   const files = useStore((s) => s.files);
   const uploaderUser = useStore((s) => s.uploaderUser);
   const description = useStore((s) => s.uploadDescription);
+  const uploadTimeZone = useStore((s) => s.uploadTimeZone);
   const selectedLocationKey = useStore((s) => s.selectedLocationKey);
   const selectedBucket = useStore((s) => s.selectedBucket);
   const dryRun = useStore((s) => s.dryRun);
@@ -60,6 +61,7 @@ export function Upload() {
           bucket: collection.bucket,
           uploaderSlug: slug,
           description,
+          timeZone: uploadTimeZone,
           files,
         },
       },

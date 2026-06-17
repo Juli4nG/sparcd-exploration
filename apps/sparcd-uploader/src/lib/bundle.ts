@@ -21,6 +21,8 @@ import {
 } from '@sparcd/camtrap';
 import { locationToDeployment, type Location } from './locations';
 import { sanitizeRelPath, resolveCollisions } from './normalize';
+import { naiveInZoneToUtcNaive } from './exifTime';
+import type { MediaKind } from './scanFiles';
 import type { FileEntry } from '../store';
 
 /** One blob to stream: the full object key (= media_path) plus its source. */
@@ -33,7 +35,9 @@ export type UploadItem = {
   file: File;
   size: number;
   sha256: string;
-  exifTimestamp?: string;
+  captureTimestamp?: string; // resolved naive-UTC capture time (post-tz), media.csv col 4
+  mediaKind: MediaKind;
+  mimeType: string;
 };
 
 export type BundlePreview = {
@@ -72,6 +76,7 @@ export type BuildInput = {
   bucket: string;
   uploaderSlug: string;
   description: string;
+  timeZone: string; // IANA zone the EXIF naive wall-clock is interpreted in
   files: FileEntry[];
   now: Date;
 };
@@ -82,7 +87,7 @@ export type BuildInput = {
  * included; collisions in the bundle-relative name get a deterministic suffix.
  */
 export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
-  const { location, collectionUuid, bucket, uploaderSlug, description, files, now } = input;
+  const { location, collectionUuid, bucket, uploaderSlug, description, timeZone, files, now } = input;
 
   const stamp = uploadStamp(now);
   const uploadPath = `Collections/${collectionUuid}/Uploads/${stamp}_${uploaderSlug}`;
@@ -100,6 +105,15 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
 
   const deployment = locationToDeployment(location, collectionUuid);
 
+  // Resolve each file's capture time in the chosen zone: naive EXIF components →
+  // DST-correct UTC naive wall-clock, the exact media.csv col-4 byte shape. A
+  // file with no naive time (no EXIF, or a video without container metadata)
+  // gets an empty timestamp — validation routes it to manual entry.
+  const mimeFor = (f: FileEntry): string =>
+    f.mimeType ?? (f.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg');
+  const captureFor = (f: FileEntry): string =>
+    f.exifNaive ? naiveInZoneToUtcNaive(f.exifNaive, timeZone) : '';
+
   const media: Media[] = ready.map((f) => {
     const objectName = names.get(f.id)!;
     const mediaPath = `${uploadPath}/${objectName}`;
@@ -108,8 +122,8 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
       deploymentId: deployment.deploymentId,
       mediaPath,
       fileName: f.fileName,
-      timestamp: f.exifTimestamp ?? '',
-      mimeType: 'image/jpeg',
+      timestamp: captureFor(f),
+      mimeType: mimeFor(f),
     };
   });
 
@@ -122,7 +136,9 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
     file: f.file,
     size: f.size,
     sha256: f.sha256!,
-    exifTimestamp: f.exifTimestamp,
+    captureTimestamp: captureFor(f) || undefined,
+    mediaKind: f.mediaKind,
+    mimeType: mimeFor(f),
   }));
 
   const deploymentsCsv = serializeDeployments([deployment]);

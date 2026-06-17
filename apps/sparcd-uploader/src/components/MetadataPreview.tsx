@@ -23,6 +23,7 @@ export function MetadataPreview({
   bucket,
   uploaderSlug,
   description,
+  timeZone,
   files,
 }: {
   location: Location;
@@ -30,6 +31,7 @@ export function MetadataPreview({
   bucket: string;
   uploaderSlug: string;
   description: string;
+  timeZone: string;
   files: FileEntry[];
 }) {
   const [bundle, setBundle] = useState<BundlePreview | null>(null);
@@ -45,9 +47,10 @@ export function MetadataPreview({
         bucket,
         uploaderSlug,
         description,
+        timeZone,
         files.map((f) => `${f.id}:${f.sha256 ?? ''}`).join('|'),
       ].join(''),
-    [location.key, collectionUuid, bucket, uploaderSlug, description, files],
+    [location.key, collectionUuid, bucket, uploaderSlug, description, timeZone, files],
   );
 
   useEffect(() => {
@@ -58,6 +61,7 @@ export function MetadataPreview({
       bucket,
       uploaderSlug,
       description,
+      timeZone,
       files,
       now: new Date(),
     }).then((b) => {
@@ -94,7 +98,9 @@ export function MetadataPreview({
           <span className="font-mono text-inkSoft break-all">
             {bundle.metadataBundleSha256.slice(0, 16)}…
           </span>
-          . The prefix timestamp is stamped at upload (P4).
+          . Capture times in <span className="font-mono">media.csv</span> are interpreted in{' '}
+          <span className="font-mono text-inkSoft">{timeZone}</span> (DST-aware). The prefix
+          timestamp is stamped at upload.
         </p>
       </div>
 

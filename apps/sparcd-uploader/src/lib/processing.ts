@@ -3,7 +3,8 @@
 // idempotent per batch token: a new batch cancels the prior run and starts a
 // fresh one; re-entering the inspect step with the same batch is a no-op.
 
-import { processBatch, type ProcessRun } from './processPool';
+import { processBatch, type ProcessRun, type ProcessResponse } from './processPool';
+import { posterFor } from './videoPoster';
 import { useStore } from '../store';
 
 let run: ProcessRun | null = null;
@@ -24,10 +25,26 @@ export function ensureProcessing(): void {
 
   const { markProcessing, applyResult, setProcessing } = useStore.getState();
   setProcessing(true);
+
+  // Videos can't be decoded in the worker; grab a poster frame on the main
+  // thread once the worker reports a video ready. Best-effort — a failure just
+  // leaves the typed placeholder tile in the file list.
+  const onResult = (r: ProcessResponse): void => {
+    applyResult(r);
+    if (!r.error && r.mediaKind === 'video' && !r.thumbnail) {
+      const entry = useStore.getState().files.find((f) => f.id === r.id);
+      if (entry) {
+        void posterFor(entry.file).then((poster) => {
+          if (poster) useStore.getState().setThumbnail(r.id, poster);
+        });
+      }
+    }
+  };
+
   run = processBatch(
-    queued.map((f) => ({ id: f.id, file: f.file })),
+    queued.map((f) => ({ id: f.id, file: f.file, fileKind: f.mediaKind })),
     markProcessing,
-    applyResult,
+    onResult,
   );
   run.done.then(() => {
     // Only clear if this is still the active run (a newer batch may have taken over).

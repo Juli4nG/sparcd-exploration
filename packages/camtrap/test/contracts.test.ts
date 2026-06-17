@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseObservations,
   parseMedia,
+  serializeMedia,
   parseCsvRows,
   parseTagMarkers,
   serializeTagMarkers,
@@ -30,10 +31,29 @@ describe('uploader contract', () => {
     expect(parseObservations(fixture('uploader-empty-v016', 'observations.csv'))).toEqual([]);
   });
 
-  it('uploader media has blank capture timestamps (tagger fills them)', () => {
-    for (const m of parseMedia(fixture('uploader-empty-v016', 'media.csv'))) {
-      expect(m.timestamp).toBe('');
-    }
+  it('uploader media carries the DST-corrected naive capture time in col 4', () => {
+    // The uploader is the writer-of-record for capture time: col 4 holds the
+    // canonical naive wall-clock (no Z), matching the java-v016 media shape.
+    const media = parseMedia(fixture('uploader-empty-v016', 'media.csv'));
+    expect(media[0].timestamp).toBe('2024-01-10T08:00:00');
+    for (const m of media) expect(m.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+  });
+
+  it('serializeMedia honors a non-empty timestamp and still allows an empty one', () => {
+    const base = {
+      mediaId: 'k',
+      deploymentId: 'd',
+      mediaPath: 'k',
+      fileName: 'f.jpg',
+      mimeType: 'image/jpeg',
+    };
+    const withTs = serializeMedia([{ ...base, timestamp: '2024-07-15T15:00:00' }]);
+    expect(parseMedia(withTs)[0].timestamp).toBe('2024-07-15T15:00:00');
+    // Round-trips the canonical 11-col shape.
+    expect(validateColumnCount(parseCsvRows(withTs), MEDIA_COLUMN_COUNT)).toBeNull();
+
+    const blank = serializeMedia([{ ...base, timestamp: '' }]);
+    expect(parseMedia(blank)[0].timestamp).toBe('');
   });
 });
 

@@ -13,6 +13,7 @@
 // prefix to record.
 
 import Dexie, { type Table } from 'dexie';
+import type { MediaKind } from './scanFiles';
 
 /**
  * How the source bytes are recovered on resume. `persistent-handle` means a
@@ -38,6 +39,7 @@ export interface BatchRecord {
   completedAt?: string; // ISO once UploadComplete.json lands
   totalFiles: number;
   totalBytes: number;
+  uploadTimeZone: string; // IANA zone EXIF naive times were interpreted in
   fileAccessMode: FileAccessMode;
   // Structured-cloned into IndexedDB on Chromium when permission was granted;
   // absent when the access mode is `reselect-required`.
@@ -53,8 +55,10 @@ export interface FileRecord {
   sanitizedObjectName: string; // resolved object name (post-collision), key tail
   size: number;
   sha256: string;
-  exifTimestamp?: string;
+  captureTimestamp?: string; // resolved naive-UTC capture time (post-tz), media.csv col 4
   exifCamera?: string;
+  mediaKind: MediaKind;
+  mimeType: string;
   state: PersistedFileState;
   remoteKey: string; // full key = uploadPrefix/sanitizedObjectName (= media_path)
   remoteETag?: string;
@@ -85,6 +89,36 @@ class UploaderDb extends Dexie {
       files: 'id, sessionId, state',
       bundles: 'sessionId',
     });
+    // v2: per-upload timezone + video support. Indexes are unchanged (the new
+    // fields aren't indexed), but the field shapes changed, so a forward-carrying
+    // upgrade rewrites legacy in-flight rows. Legacy rows pre-date tz support:
+    // their `exifTimestamp` was a browser-zone ISO; carry it verbatim as
+    // `captureTimestamp` so a resume reproduces the prior bytes, and stamp UTC
+    // as the upload zone so the bundle rebuild doesn't re-derive a different
+    // instant. Default `mediaKind`/`mimeType` to image (the only legacy type).
+    this.version(2)
+      .stores({
+        batches: 'id, completedAt',
+        files: 'id, sessionId, state',
+        bundles: 'sessionId',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('files')
+          .toCollection()
+          .modify((f: Record<string, unknown>) => {
+            if (f.captureTimestamp === undefined) f.captureTimestamp = f.exifTimestamp;
+            delete f.exifTimestamp;
+            if (f.mediaKind === undefined) f.mediaKind = 'image';
+            if (f.mimeType === undefined) f.mimeType = 'image/jpeg';
+          });
+        await tx
+          .table('batches')
+          .toCollection()
+          .modify((b: Record<string, unknown>) => {
+            if (b.uploadTimeZone === undefined) b.uploadTimeZone = 'UTC';
+          });
+      });
   }
 }
 

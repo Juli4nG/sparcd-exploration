@@ -31,15 +31,17 @@ export function validateBatch(files: FileEntry[]): Record<string, FileValidation
       issues.push({ severity: 'error', message: f.processError ?? 'Processing failed' });
     }
 
-    // Object-key safety. JPEG type is guaranteed by the scan, so the only name
-    // failure mode here is an unsafe relative path.
+    // Object-key safety. The scan guarantees an accepted media type, so the only
+    // name failure mode here is an unsafe relative path.
     const nameResult = sanitizeRelPath(f.relPath);
     if (!nameResult.ok) {
       issues.push({ severity: 'error', message: `Unsafe filename — ${nameResult.reason}` });
     }
 
-    // EXIF timestamp is required; absence routes the file to "needs attention".
-    if (f.processState === 'ready' && !f.exifTimestamp) {
+    // A capture time is required. EXIF (images) or MP4 container metadata
+    // (videos) supplies it; absence — including a video with no container time —
+    // routes the file to "needs attention" / manual entry.
+    if (f.processState === 'ready' && !f.exifNaive) {
       issues.push({ severity: 'error', message: 'No EXIF timestamp — needs manual entry' });
     }
 

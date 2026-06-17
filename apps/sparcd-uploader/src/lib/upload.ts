@@ -144,7 +144,9 @@ type PlanItem = {
   key: string;
   size: number;
   sha256: string;
-  exifTimestamp?: string;
+  captureTimestamp?: string;
+  mediaKind: FileRecord['mediaKind'];
+  mimeType: string;
   file: File | null;
   doneAlready: boolean;
 };
@@ -187,7 +189,9 @@ const planFromBundle = (sessionId: string, bundle: BundlePreview): RunPlan => ({
     key: it.key,
     size: it.size,
     sha256: it.sha256,
-    exifTimestamp: it.exifTimestamp,
+    captureTimestamp: it.captureTimestamp,
+    mediaKind: it.mediaKind,
+    mimeType: it.mimeType,
     file: it.file,
     doneAlready: false,
   })),
@@ -203,7 +207,9 @@ const fileRecordFor = (sessionId: string, it: PlanItem, state: FileRecord['state
   sanitizedObjectName: it.objectName,
   size: it.size,
   sha256: it.sha256,
-  exifTimestamp: it.exifTimestamp,
+  captureTimestamp: it.captureTimestamp,
+  mediaKind: it.mediaKind,
+  mimeType: it.mimeType,
   state,
   remoteKey: it.key,
   attempt: 0,
@@ -300,7 +306,7 @@ function makeRunner(
       try {
         const { etag } = await client.writeImmutableStream(snap.bucket, it.key, it.file, {
           sha256: it.sha256,
-          contentType: 'image/jpeg',
+          contentType: it.mimeType,
           signal: abort.signal,
           onProgress: (loaded) => {
             snap.uploadedBytes += loaded - fp.loaded;
@@ -492,6 +498,7 @@ export function runUpload(
           startedAt,
           totalFiles: plan.items.length,
           totalBytes: plan.totalBytes,
+          uploadTimeZone: build.timeZone,
           fileAccessMode: params.fileAccessMode ?? 'reselect-required',
           dirHandle: params.dirHandle ?? undefined,
         };
@@ -573,7 +580,9 @@ export function resumeUpload(
       key: r.remoteKey,
       size: r.size,
       sha256: r.sha256,
-      exifTimestamp: r.exifTimestamp,
+      captureTimestamp: r.captureTimestamp,
+      mediaKind: r.mediaKind,
+      mimeType: r.mimeType,
       file: attached.get(r.localPath) ?? null,
       doneAlready: r.state === 'done',
     })),

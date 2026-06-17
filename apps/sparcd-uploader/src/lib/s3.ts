@@ -11,7 +11,10 @@ import {
   type CollectionRef,
 } from '@sparcd/s3-safe';
 import type { S3Config } from '@sparcd/types';
+import { parseUploadMeta, type UploadMetaJson } from '@sparcd/camtrap';
 import { LOCATIONS_KEY, parseLocations, type LocationsParse } from './locations';
+import { sha256Hex } from './hash';
+import type { EditCanonical, EditIO, EditRole } from './publishedEdit';
 
 // Client-side bucket allowlists are not a security boundary in a static app.
 // They exist only because the wrapper requires an explicit scope; the connected
@@ -166,5 +169,123 @@ export async function listCollectionDeploymentLocationIds(
     }),
   );
   return [...ids];
+}
+
+// --- Edit-after-publish (Stage B) ------------------------------------------
+//
+// The read + write S3 surface for correcting a published upload. The same
+// `getClient` is used for reads and writes (its write scope is already granted,
+// line 32), so the edit IO physically can issue a `replaceIfUnchanged`. A
+// dry-run never calls the write closures, so it touches nothing.
+
+const EDIT_FILE: Record<EditRole, string> = {
+  deployments: 'deployments.csv',
+  media: 'media.csv',
+  observations: 'observations.csv',
+  uploadMeta: 'UploadMeta.json',
+};
+
+/** Load one canonical object with its ETag + content hash (the edit ground). */
+async function loadEditObject(
+  client: SafeS3Client,
+  bucket: string,
+  key: string,
+  what: string,
+): Promise<{ text: string; etag: string; hash: string }> {
+  try {
+    // HEAD first for the ETag, then GET the bytes. A concurrent change between
+    // the two only risks a spurious conflict (safe-fail) — the write re-checks
+    // IfMatch — never a bad write.
+    const stat = await client.statObject(bucket, key);
+    const bytes = await client.getObject(bucket, key);
+    return { text: new TextDecoder().decode(bytes), etag: stat.etag ?? '', hash: await sha256Hex(bytes) };
+  } catch (err) {
+    throw translateReadError(err, what);
+  }
+}
+
+/** Read a published upload's canonical files (bytes + etag + hash) for grounding an edit. */
+export async function loadPublishedCanonical(
+  cfg: S3Config,
+  bucket: string,
+  uploadPrefix: string,
+  roles: EditRole[],
+): Promise<EditCanonical> {
+  const client = getClient(cfg);
+  const entries = await Promise.all(
+    roles.map(async (role) => {
+      const file = EDIT_FILE[role];
+      return [role, await loadEditObject(client, bucket, `${uploadPrefix}${file}`, file)] as const;
+    }),
+  );
+  return Object.fromEntries(entries) as EditCanonical;
+}
+
+export type UploadMetaRead = { meta: UploadMetaJson; etag: string; hash: string; text: string };
+
+/** Read `UploadMeta.json` for the description-edit form prefill + its base ETag/hash. */
+export async function readUploadMeta(
+  cfg: S3Config,
+  bucket: string,
+  uploadPrefix: string,
+): Promise<UploadMetaRead> {
+  const loaded = await loadEditObject(getClient(cfg), bucket, `${uploadPrefix}UploadMeta.json`, 'UploadMeta.json');
+  return { meta: parseUploadMeta(loaded.text), etag: loaded.etag, hash: loaded.hash, text: loaded.text };
+}
+
+/**
+ * Assemble the injected `EditIO` for one published upload. The write closures
+ * go through `getClient(cfg)` (write-scoped), but a dry-run calls neither, so a
+ * dry-run never writes a byte — not even a snapshot.
+ */
+export function makeEditIO(cfg: S3Config, bucket: string, uploadPrefix: string): EditIO {
+  return {
+    loadCanonical: (roles) => loadPublishedCanonical(cfg, bucket, uploadPrefix, roles),
+    writeSnapshot: async (key, body, contentType) => {
+      await getClient(cfg).writeImmutable(bucket, key, body, { contentType });
+    },
+    replace: (key, body, etag, contentType) =>
+      getClient(cfg).replaceIfUnchanged(bucket, key, body, { etag, contentType }),
+    now: () => new Date(),
+  };
+}
+
+export type PublishedUpload = {
+  prefix: string; // full `Collections/<uuid>/Uploads/<stamp>/`
+  stamp: string;
+  meta: UploadMetaJson;
+  /** The current single deployment_id from `deployments.csv` col 0, if present. */
+  deploymentId: string | null;
+};
+
+/**
+ * List the published uploads of a collection for the management UI: each
+ * upload's `UploadMeta.json` (description + tally) and its current deployment_id.
+ * One small GET per upload; an upload missing either file is skipped.
+ */
+export async function listPublishedUploads(cfg: S3Config, ref: CollectionRef): Promise<PublishedUpload[]> {
+  const client = getClient(cfg);
+  const uploadDirs = await client.listCommonPrefixes(ref.bucket, `Collections/${ref.uuid}/Uploads/`);
+  const out = await Promise.all(
+    uploadDirs.map(async (prefix): Promise<PublishedUpload | null> => {
+      try {
+        const metaBytes = await client.getObject(ref.bucket, `${prefix}UploadMeta.json`);
+        const meta = parseUploadMeta(new TextDecoder().decode(metaBytes));
+        let deploymentId: string | null = null;
+        try {
+          const depText = new TextDecoder().decode(await client.getObject(ref.bucket, `${prefix}deployments.csv`));
+          deploymentId = parseCsvLine(depText.split('\n').find((l) => l.trim()) ?? '')[0]?.trim() || null;
+        } catch {
+          // No deployments.csv — leave deploymentId null.
+        }
+        return { prefix, stamp: prefix.replace(/\/$/, '').split('/').pop() ?? prefix, meta, deploymentId };
+      } catch {
+        return null; // No UploadMeta.json yet, or unreadable / CORS-blocked.
+      }
+    }),
+  );
+  return out
+    .filter((u): u is PublishedUpload => u !== null)
+    .sort((a, b) => b.stamp.localeCompare(a.stamp)); // newest first
 }
 

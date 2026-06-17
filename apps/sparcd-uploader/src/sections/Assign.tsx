@@ -5,6 +5,7 @@ import { useCollections, useCollectionDeployments } from '../lib/useCollections'
 import { DeploymentPicker } from '../components/DeploymentPicker';
 import { MetadataPreview } from '../components/MetadataPreview';
 import { sanitizeUploaderUser } from '../lib/normalize';
+import { supportedTimeZones } from '../lib/exifTime';
 
 const sectionLabel =
   'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
@@ -29,6 +30,8 @@ export function Assign() {
   const setUploaderUser = useStore((s) => s.setUploaderUser);
   const description = useStore((s) => s.uploadDescription);
   const setDescription = useStore((s) => s.setUploadDescription);
+  const uploadTimeZone = useStore((s) => s.uploadTimeZone);
+  const setUploadTimeZone = useStore((s) => s.setUploadTimeZone);
   const selectedLocationKey = useStore((s) => s.selectedLocationKey);
   const setSelectedLocationKey = useStore((s) => s.setSelectedLocationKey);
   const selectedBucket = useStore((s) => s.selectedBucket);
@@ -71,6 +74,12 @@ export function Assign() {
 
   const location = collectionLocations.find((l) => l.key === selectedLocationKey) ?? null;
   const canContinue = !!selectedLocationKey && !!slug && !!collection;
+
+  // The chosen zone is always offered even if it isn't in the platform's list.
+  const timeZones = useMemo(() => {
+    const all = supportedTimeZones();
+    return all.includes(uploadTimeZone) ? all : [uploadTimeZone, ...all];
+  }, [uploadTimeZone]);
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
@@ -186,6 +195,26 @@ export function Assign() {
       </section>
 
       <section>
+        <h2 className={sectionLabel}>Timezone</h2>
+        <select
+          value={uploadTimeZone}
+          onChange={(e) => setUploadTimeZone(e.target.value)}
+          className="w-full border border-rule bg-paper px-3 py-2 font-body text-[14px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
+        >
+          {timeZones.map((tz) => (
+            <option key={tz} value={tz}>
+              {tz}
+            </option>
+          ))}
+        </select>
+        <p className="font-body text-[12px] text-inkMute mt-1.5">
+          EXIF times are wall-clock with no zone. Interpreting them in this zone fixes the stored
+          capture instant (DST-aware). Defaults to this machine’s zone; change it to the camera’s
+          zone when they differ.
+        </p>
+      </section>
+
+      <section>
         <h2 className={sectionLabel}>Description</h2>
         <textarea
           value={description}
@@ -208,6 +237,7 @@ export function Assign() {
             bucket={collection.bucket}
             uploaderSlug={slug}
             description={description}
+            timeZone={uploadTimeZone}
             files={files}
           />
         ) : (
