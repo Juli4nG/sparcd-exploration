@@ -11,6 +11,7 @@ import {
   requestedSpeciesFromComments,
   type Observation,
 } from '@sparcd/camtrap';
+import type { DraftObservation } from './db';
 
 /** The canonical CSV text `buildTagImages` reads (the sync path adds ETags/hashes). */
 export type CanonicalBundle = {
@@ -24,10 +25,7 @@ export type TagImage = {
   fileName: string;
   deploymentId: string;
   baseTimestamp: string; // media col 4, ISO
-  baseLabel: string; // first existing observation's scientificName, or ''
-  baseCommonName: string;
-  baseCount: number;
-  baseRequested: string;
+  baseObservations: DraftObservation[]; // ALL canonical observation rows, in CSV order
 };
 
 // `.jpg`/`.mp4` only — same definition of "taggable image" the readers use, so
@@ -45,17 +43,18 @@ export function buildTagImages(bundle: CanonicalBundle): TagImage[] {
 
   return parseMedia(bundle.mediaCsv)
     .filter((m) => IMAGE_EXT.test(m.mediaId))
-    .map((m) => {
-      const first = obsByMedia.get(m.mediaId)?.[0];
-      return {
-        key: m.mediaId,
-        fileName: m.fileName || (m.mediaId.split('/').pop() ?? m.mediaId),
-        deploymentId: m.deploymentId,
-        baseTimestamp: m.timestamp,
-        baseLabel: first?.scientificName ?? '',
-        baseCommonName: first ? (commonNameFromComments(first.tags) ?? '') : '',
-        baseCount: first?.count ?? 0,
-        baseRequested: first ? (requestedSpeciesFromComments(first.tags) ?? '') : '',
-      };
-    });
+    .map((m) => ({
+      key: m.mediaId,
+      fileName: m.fileName || (m.mediaId.split('/').pop() ?? m.mediaId),
+      deploymentId: m.deploymentId,
+      baseTimestamp: m.timestamp,
+      baseObservations: (obsByMedia.get(m.mediaId) ?? []).map((o) => ({
+        scientificName: o.scientificName,
+        commonName: commonNameFromComments(o.tags) ?? '',
+        count: o.count,
+        requestedSpecies: requestedSpeciesFromComments(o.tags) ?? '',
+        // Base free-tags aren't surfaced today; keep '' to match prior behaviour.
+        freeTags: '',
+      })),
+    }));
 }

@@ -12,10 +12,20 @@ import Dexie, { type Table } from 'dexie';
 import type { CanonicalState } from './sync';
 import type { SyncJournal } from './syncJournal';
 
+/** One applied species on an image — the unit of the multi-species set. Identity
+ *  within an image is `scientificName` (Ghost = `Casper`). The single source of
+ *  truth for the shape; `drafts.ts` and `workspace.ts` re-use it. */
+export type DraftObservation = {
+  scientificName: string; // species or non-animal label; never '' once stored
+  commonName: string; // → [COMMONNAME:…] at sync; '' when none / requested-only
+  count: number; // ≥1 always
+  requestedSpecies: string; // free-text request → [REQUESTED_SPECIES:…]; '' otherwise
+  freeTags: string; // extra raw markers, preserved verbatim (per-observation)
+};
+
 /** One image's local edit. `id` = `${bucket}::${uploadPrefix}::${mediaPath}`.
- *  `label` is the applied species `scientificName` **or** a non-animal label
- *  (e.g. `Casper` for Ghost); `''` means detagged / no species. A SPARC'd
- *  observation is species + count only — there is no behaviour field. */
+ *  `observations` is the ordered set of applied species; `[]` means detagged /
+ *  no species. A SPARC'd observation is species + count only — no behaviour field. */
 export interface DraftRecord {
   id: string;
   bucket: string;
@@ -23,12 +33,8 @@ export interface DraftRecord {
   mediaPath: string; // full object key = media.csv col 0
   deploymentId: string; // carried from canonical media for the eventual obs row
 
-  // Applied tag (single label per image in v1 — multi-species is a later phase).
-  label: string;
-  commonName: string; // → [COMMONNAME:…] at sync; '' when label is unset/non-species
-  count: number;
-  requestedSpecies: string; // free-text species request → [REQUESTED_SPECIES:…]
-  freeTags: string; // extra raw markers, preserved verbatim
+  // The full intended species set for this image, in apply order.
+  observations: DraftObservation[];
   questionable: boolean;
   timeOverride: string | null; // per-image corrected ISO timestamp; null when unset
 
@@ -101,6 +107,36 @@ class TaggerDb extends Dexie {
     // purely additive store needs no upgrade callback; v1 drafts carry forward
     // untouched. Keyed `${bucket}::${uploadPrefix}` (= the journal's own `id`).
     this.version(2).stores({ syncJournals: 'id' });
+    // v3 collapses the single-label tag fields into an `observations` array
+    // (multi-species). Same indexes, restated so the upgrade callback attaches.
+    // A non-empty `label` becomes exactly one observation (count floored to 1);
+    // an empty label becomes `[]`. Ghost (`Casper`) is just one observation.
+    this.version(3)
+      .stores({ drafts: 'id, [bucket+uploadPrefix]' })
+      .upgrade(async (tx) => {
+        await tx
+          .table('drafts')
+          .toCollection()
+          .modify((d: Record<string, unknown>) => {
+            const label = (d.label as string) ?? '';
+            d.observations = label
+              ? [
+                  {
+                    scientificName: label,
+                    commonName: (d.commonName as string) ?? '',
+                    count: Math.max(1, (d.count as number) ?? 1),
+                    requestedSpecies: (d.requestedSpecies as string) ?? '',
+                    freeTags: (d.freeTags as string) ?? '',
+                  },
+                ]
+              : [];
+            delete d.label;
+            delete d.commonName;
+            delete d.count;
+            delete d.requestedSpecies;
+            delete d.freeTags;
+          });
+      });
   }
 }
 

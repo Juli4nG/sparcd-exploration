@@ -17,32 +17,78 @@ import {
   getUpload,
   setUploadTimeOffset,
   type DraftRecord,
+  type DraftObservation,
   type TimeOffsetRecord,
 } from './db';
 
+export type { DraftObservation };
+
 /** The built-in non-animal label. Encoded as a species row (`Casper`, count ≥1)
- *  so it counts as species-present exactly like Java treats it (P0 decision). */
+ *  so it counts as species-present exactly like Java treats it (P0 decision).
+ *  Ghost is mutually exclusive with real species. */
 export const GHOST = { label: 'Casper', commonName: 'Ghost' } as const;
+
+const isGhost = (o: DraftObservation): boolean => o.scientificName === GHOST.label;
 
 export type UploadCtx = { bucket: string; uploadPrefix: string };
 
-/** The canonical base tag for an image, used only to seed a brand-new draft. */
-export type BaseSeed = { label: string; commonName: string; count: number; requestedSpecies: string };
+/** The canonical base observation set for an image, used to seed a brand-new
+ *  draft. Seeding from the FULL base set is the core of the multi-species fix:
+ *  editing one species of a multi-species image preserves every other. */
+export type BaseSeed = { observations: DraftObservation[] };
 
 /** One image a batch operation targets: its media path + deployment, plus the
- *  optional canonical base tag. The base seeds a *freshly created* draft so a
- *  partial edit (e.g. toggling questionable on an already-tagged image) never
- *  drops the existing species — a draft is the image's full intended state. */
+ *  optional canonical base set. The base seeds a *freshly created* draft so a
+ *  partial edit (e.g. toggling questionable, adding one species) never drops the
+ *  image's existing species — a draft is the image's full intended state. */
 export type TagTarget = { mediaPath: string; deploymentId: string; base?: BaseSeed };
 
-/** The tag a UI action applies to an image. */
+/** The species a UI action applies to an image (add-only; one species). */
 export type AppliedTag = {
-  label: string; // scientificName or '' to detag
+  scientificName: string; // a real species or `Casper`; '' is invalid (use detag)
   commonName: string;
-  count: number;
+  count: number; // floored to ≥1
   requestedSpecies?: string;
   freeTags?: string;
 };
+
+// --- Pure array transforms (exported for unit tests) -----------------------
+
+/** Add-only: applying a species already present is a NO-OP (no dup, no count
+ *  change). Mutual exclusivity: applying Ghost replaces the whole set; applying
+ *  a real species first clears any Ghost. Order is preserved (append last). */
+export function addObservation(obs: DraftObservation[], tag: AppliedTag): DraftObservation[] {
+  const next: DraftObservation = {
+    scientificName: tag.scientificName,
+    commonName: tag.commonName,
+    count: Math.max(1, tag.count),
+    requestedSpecies: tag.requestedSpecies ?? '',
+    freeTags: tag.freeTags ?? '',
+  };
+  if (isGhost(next)) return [next]; // Ghost replaces all real species
+  const withoutGhost = obs.filter((o) => !isGhost(o)); // a real species clears Ghost
+  if (withoutGhost.some((o) => o.scientificName === next.scientificName)) return withoutGhost; // NO-OP
+  return [...withoutGhost, next];
+}
+
+/** Remove exactly the named species, keeping every other (and its order). */
+export function removeObservation(
+  obs: DraftObservation[],
+  scientificName: string,
+): DraftObservation[] {
+  return obs.filter((o) => o.scientificName !== scientificName);
+}
+
+/** Set one species' count (floored to ≥1), leaving the others untouched. */
+export function setObservationCount(
+  obs: DraftObservation[],
+  scientificName: string,
+  count: number,
+): DraftObservation[] {
+  return obs.map((o) =>
+    o.scientificName === scientificName ? { ...o, count: Math.max(1, count) } : o,
+  );
+}
 
 type DraftState = {
   loadedKey: string | null; // `${bucket}::${uploadPrefix}` currently hydrated
@@ -51,8 +97,28 @@ type DraftState = {
   timeOffset: TimeOffsetRecord | null; // upload-level signed Δ for the loaded upload
 
   loadUpload: (ctx: UploadCtx) => Promise<void>;
-  applyTag: (ctx: UploadCtx, mediaPath: string, deploymentId: string, tag: AppliedTag) => void;
-  detag: (ctx: UploadCtx, mediaPath: string, deploymentId: string) => void;
+
+  /** Add-only species apply to one focused image OR every target in a selection. */
+  addSpecies: (ctx: UploadCtx, targets: TagTarget[], tag: AppliedTag) => void;
+  /** Remove ONE species from ONE image (chip ✕). */
+  removeSpecies: (
+    ctx: UploadCtx,
+    mediaPath: string,
+    deploymentId: string,
+    base: BaseSeed | undefined,
+    scientificName: string,
+  ) => void;
+  /** Set per-species count on ONE image (chip count editor). */
+  setSpeciesCount: (
+    ctx: UploadCtx,
+    mediaPath: string,
+    deploymentId: string,
+    base: BaseSeed | undefined,
+    scientificName: string,
+    count: number,
+  ) => void;
+  /** Detag = clear ALL species on one focused image OR every target in a selection. */
+  detag: (ctx: UploadCtx, targets: TagTarget[]) => void;
   toggleQuestionable: (ctx: UploadCtx, mediaPath: string, deploymentId: string) => void;
 
   /** Set (or clear with null) the upload-level offset applied to every image.
@@ -70,8 +136,6 @@ type DraftState = {
   // Batch variants for whole-burst / multi-select: one state update + one Dexie
   // write per target, so applying to a 2,000-image burst is a single re-render
   // of the changed rows, not 2,000 sequential store mutations.
-  applyTagMany: (ctx: UploadCtx, targets: TagTarget[], tag: AppliedTag) => void;
-  detagMany: (ctx: UploadCtx, targets: TagTarget[]) => void;
   setQuestionableMany: (ctx: UploadCtx, targets: TagTarget[], value: boolean) => void;
 
   /** Flush every pending debounced Dexie write now (manual Cmd/Ctrl+S confirm). */
@@ -99,8 +163,8 @@ function scheduleSave(record: DraftRecord): void {
   );
 }
 
-/** A fresh draft for an image, seeded from its canonical base tag when one is
- *  supplied so a partial edit preserves the existing species. */
+/** A fresh draft for an image, seeded from its canonical base observation set
+ *  when one is supplied so a partial edit preserves every existing species. */
 export function blankDraft(
   ctx: UploadCtx,
   mediaPath: string,
@@ -113,11 +177,7 @@ export function blankDraft(
     uploadPrefix: ctx.uploadPrefix,
     mediaPath,
     deploymentId,
-    label: base?.label ?? '',
-    commonName: base?.commonName ?? '',
-    count: base?.count ?? 0,
-    requestedSpecies: base?.requestedSpecies ?? '',
-    freeTags: '',
+    observations: base ? base.observations.map((o) => ({ ...o })) : [],
     questionable: false,
     timeOverride: null,
     lastEdited: '',
@@ -126,19 +186,26 @@ export function blankDraft(
 }
 
 export const useDraftStore = create<DraftState>((set, get) => {
-  /** Apply the same patch to one or more images in a single state update,
-   *  scheduling a debounced Dexie write per touched record. */
-  const mutateMany = (ctx: UploadCtx, targets: TagTarget[], patch: Partial<DraftRecord>): void => {
+  /** Apply a patch — static, or a reducer of the previous record — to one or
+   *  more images in a single state update, scheduling a debounced Dexie write
+   *  per touched record. The reducer form lets add/remove/count read the current
+   *  observation array (which a static `Partial` cannot). */
+  const mutateMany = (
+    ctx: UploadCtx,
+    targets: TagTarget[],
+    patch: Partial<DraftRecord> | ((prev: DraftRecord) => Partial<DraftRecord>),
+  ): void => {
     if (!targets.length) return;
     const now = new Date().toISOString();
     const updates: Record<string, DraftRecord> = {};
     const cur = get().drafts;
     for (const { mediaPath, deploymentId, base } of targets) {
       const prev = cur[mediaPath] ?? blankDraft(ctx, mediaPath, deploymentId, base);
+      const p = typeof patch === 'function' ? patch(prev) : patch;
       const next: DraftRecord = {
         ...prev,
         deploymentId: deploymentId || prev.deploymentId,
-        ...patch,
+        ...p,
         lastEdited: now,
         dirty: true,
       };
@@ -147,21 +214,6 @@ export const useDraftStore = create<DraftState>((set, get) => {
     }
     set((s) => ({ drafts: { ...s.drafts, ...updates } }));
   };
-
-  const mutate = (
-    ctx: UploadCtx,
-    mediaPath: string,
-    deploymentId: string,
-    patch: Partial<DraftRecord>,
-  ): void => mutateMany(ctx, [{ mediaPath, deploymentId }], patch);
-
-  const tagPatch = (tag: AppliedTag): Partial<DraftRecord> => ({
-    label: tag.label,
-    commonName: tag.commonName,
-    count: tag.label ? Math.max(1, tag.count) : 0,
-    requestedSpecies: tag.requestedSpecies ?? '',
-    freeTags: tag.freeTags ?? '',
-  });
 
   return {
     loadedKey: null,
@@ -187,20 +239,24 @@ export const useDraftStore = create<DraftState>((set, get) => {
       set({ loading: false, drafts: map, timeOffset: upload?.timeOffset ?? null });
     },
 
-    applyTag: (ctx, mediaPath, deploymentId, tag) =>
-      mutate(ctx, mediaPath, deploymentId, tagPatch(tag)),
+    addSpecies: (ctx, targets, tag) =>
+      mutateMany(ctx, targets, (prev) => ({ observations: addObservation(prev.observations, tag) })),
 
-    detag: (ctx, mediaPath, deploymentId) =>
-      mutate(ctx, mediaPath, deploymentId, {
-        label: '',
-        commonName: '',
-        count: 0,
-        requestedSpecies: '',
-      }),
+    removeSpecies: (ctx, mediaPath, deploymentId, base, sci) =>
+      mutateMany(ctx, [{ mediaPath, deploymentId, base }], (prev) => ({
+        observations: removeObservation(prev.observations, sci),
+      })),
+
+    setSpeciesCount: (ctx, mediaPath, deploymentId, base, sci, count) =>
+      mutateMany(ctx, [{ mediaPath, deploymentId, base }], (prev) => ({
+        observations: setObservationCount(prev.observations, sci, count),
+      })),
+
+    detag: (ctx, targets) => mutateMany(ctx, targets, { observations: [] }),
 
     toggleQuestionable: (ctx, mediaPath, deploymentId) => {
       const prev = get().drafts[mediaPath];
-      mutate(ctx, mediaPath, deploymentId, { questionable: !prev?.questionable });
+      mutateMany(ctx, [{ mediaPath, deploymentId }], { questionable: !prev?.questionable });
     },
 
     setTimeOffset: (ctx, offset) => {
@@ -212,12 +268,7 @@ export const useDraftStore = create<DraftState>((set, get) => {
     },
 
     setTimeOverride: (ctx, mediaPath, deploymentId, iso) =>
-      mutate(ctx, mediaPath, deploymentId, { timeOverride: iso }),
-
-    applyTagMany: (ctx, targets, tag) => mutateMany(ctx, targets, tagPatch(tag)),
-
-    detagMany: (ctx, targets) =>
-      mutateMany(ctx, targets, { label: '', commonName: '', count: 0, requestedSpecies: '' }),
+      mutateMany(ctx, [{ mediaPath, deploymentId }], { timeOverride: iso }),
 
     setQuestionableMany: (ctx, targets, value) =>
       mutateMany(ctx, targets, { questionable: value }),

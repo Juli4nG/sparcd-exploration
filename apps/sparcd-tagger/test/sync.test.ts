@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   serializeCsvRows,
+  parseCsvRows,
   serializeUploadMeta,
   buildUploadMeta,
   MEDIA_COL,
@@ -8,6 +9,7 @@ import {
   MEDIA_COLUMN_COUNT,
   OBS_COLUMN_COUNT,
 } from '@sparcd/camtrap';
+import { mergeObservations, parseObservations, mergeMedia } from '@sparcd/camtrap';
 import {
   buildSyncPlan,
   runSync,
@@ -19,8 +21,15 @@ import {
 import type { SyncJournal } from '../src/lib/syncJournal';
 import { sha256Hex } from '../src/lib/hash';
 import type { TagImage } from '../src/lib/workspace';
-import type { DraftRecord } from '../src/lib/db';
+import type { DraftRecord, DraftObservation } from '../src/lib/db';
 import { blankDraft } from '../src/lib/drafts';
+
+const obs = (
+  scientificName: string,
+  count = 1,
+  commonName = '',
+  requestedSpecies = '',
+): DraftObservation => ({ scientificName, commonName, count, requestedSpecies, freeTags: '' });
 
 const PREFIX = 'Collections/uuid/Uploads/2024.01.15.10.00.00/';
 const DEP = 'uuid:SAN15';
@@ -79,21 +88,21 @@ async function canonical(): Promise<CanonicalState> {
 }
 
 const IMAGES: TagImage[] = [
-  { key: K1, fileName: 'IMG001.JPG', deploymentId: DEP, baseTimestamp: '2024-01-10T08:00:00', baseLabel: 'Puma concolor', baseCommonName: '', baseCount: 1, baseRequested: '' },
-  { key: K2, fileName: 'IMG002.JPG', deploymentId: DEP, baseTimestamp: '2024-01-10T08:00:30', baseLabel: '', baseCommonName: '', baseCount: 0, baseRequested: '' },
+  { key: K1, fileName: 'IMG001.JPG', deploymentId: DEP, baseTimestamp: '2024-01-10T08:00:00', baseObservations: [obs('Puma concolor', 1)] },
+  { key: K2, fileName: 'IMG002.JPG', deploymentId: DEP, baseTimestamp: '2024-01-10T08:00:30', baseObservations: [] },
 ];
 
 function draft(over: Partial<DraftRecord>): DraftRecord {
   return {
     id: '', bucket: 'sparcd-x', uploadPrefix: PREFIX, mediaPath: '', deploymentId: DEP,
-    label: '', commonName: '', count: 0, requestedSpecies: '', freeTags: '',
+    observations: [],
     questionable: false, timeOverride: null, lastEdited: '', dirty: true, ...over,
   };
 }
 
 // Add a species to the untagged IMG002.
 const ADD_DRAFTS: Record<string, DraftRecord> = {
-  [K2]: draft({ mediaPath: K2, label: 'Canis latrans', commonName: 'Coyote', count: 1 }),
+  [K2]: draft({ mediaPath: K2, observations: [obs('Canis latrans', 1, 'Coyote')] }),
 };
 
 const NOW = new Date('2024-01-20T14:30:00');
@@ -150,7 +159,7 @@ describe('buildSyncPlan', () => {
   });
 
   it('classifies a detag as a removal with empty observations', () => {
-    const plan = buildSyncPlan(IMAGES, { [K1]: draft({ mediaPath: K1, label: '' }) }, null);
+    const plan = buildSyncPlan(IMAGES, { [K1]: draft({ mediaPath: K1, observations: [] }) }, null);
     expect(plan.summary.removals).toBe(1);
     expect(plan.tagEdits[0].observations).toEqual([]);
   });
@@ -158,7 +167,7 @@ describe('buildSyncPlan', () => {
   it('ignores a questionable-only toggle (no canonical change)', () => {
     const plan = buildSyncPlan(
       IMAGES,
-      { [K1]: draft({ mediaPath: K1, label: 'Puma concolor', count: 1, questionable: true }) },
+      { [K1]: draft({ mediaPath: K1, observations: [obs('Puma concolor', 1)], questionable: true }) },
       null,
     );
     expect(plan.tagEdits).toHaveLength(0);
@@ -167,14 +176,11 @@ describe('buildSyncPlan', () => {
 
   it('does not detag a base-tagged image when questionable is toggled (seeded draft)', () => {
     // Mirror the real store path: toggling questionable on an already-tagged
-    // image creates a draft *seeded from the base tag*, then flips questionable.
-    // A draft that did not carry the base label forward would be misclassified
-    // as a detag — the regression this guards.
+    // image creates a draft *seeded from the base set*, then flips questionable.
+    // A draft that did not carry the base observations forward would be
+    // misclassified as a detag — the regression this guards.
     const seeded = blankDraft({ bucket: 'sparcd-x', uploadPrefix: PREFIX }, K1, DEP, {
-      label: 'Puma concolor',
-      commonName: '',
-      count: 1,
-      requestedSpecies: '',
+      observations: [obs('Puma concolor', 1)],
     });
     const plan = buildSyncPlan(IMAGES, { [K1]: { ...seeded, questionable: true, dirty: true } }, null);
     expect(plan.summary.removals).toBe(0);
@@ -186,22 +192,125 @@ describe('buildSyncPlan', () => {
     // A non-dirty draft carries no pending intent; it must defer to the base.
     const plan = buildSyncPlan(
       IMAGES,
-      { [K2]: draft({ mediaPath: K2, label: 'Canis latrans', commonName: 'Coyote', count: 1, dirty: false }) },
+      { [K2]: draft({ mediaPath: K2, observations: [obs('Canis latrans', 1, 'Coyote')], dirty: false }) },
       null,
     );
     expect(plan.tagEdits).toHaveLength(0);
   });
 
   it('emits a time-only media edit for a per-image override that keeps the tag', () => {
+    const seeded = blankDraft({ bucket: 'sparcd-x', uploadPrefix: PREFIX }, K1, DEP, {
+      observations: [obs('Puma concolor', 1)],
+    });
     const plan = buildSyncPlan(
       IMAGES,
-      { [K1]: draft({ mediaPath: K1, label: 'Puma concolor', count: 1, timeOverride: '2024-01-10T09:00:00' }) },
+      { [K1]: { ...seeded, timeOverride: '2024-01-10T09:00:00', dirty: true } },
       null,
     );
     expect(plan.tagEdits).toHaveLength(0);
     expect(plan.timeEdits).toHaveLength(1);
     expect(plan.timeEdits[0].mediaTimestamp).toBe('2024-01-10T09:00:00');
+    expect(plan.timeEdits[0].observations).toEqual([]);
     expect(plan.summary.timeCorrections).toBe(1);
+  });
+
+  // --- Multi-species data-loss proofs (RED against the old single-label code) -
+
+  const K3 = `${PREFIX}IMG003.JPG`;
+  const MULTI_IMAGES: TagImage[] = [
+    {
+      key: K3,
+      fileName: 'IMG003.JPG',
+      deploymentId: DEP,
+      baseTimestamp: '2024-01-10T08:01:00',
+      baseObservations: [obs('Odocoileus hemionus', 1, 'Mule Deer'), obs('Canis latrans', 1, 'Coyote')],
+    },
+  ];
+
+  it('a multi-species base image gaining a third species carries ALL three, never collapsed', () => {
+    const draftObs = [
+      obs('Odocoileus hemionus', 1, 'Mule Deer'),
+      obs('Canis latrans', 1, 'Coyote'),
+      obs('Lynx rufus', 1, 'Bobcat'),
+    ];
+    const plan = buildSyncPlan(MULTI_IMAGES, { [K3]: draft({ mediaPath: K3, observations: draftObs }) }, null);
+    expect(plan.tagEdits).toHaveLength(1);
+    expect(plan.tagEdits[0].observations.map((o) => o.scientificName)).toEqual([
+      'Odocoileus hemionus',
+      'Canis latrans',
+      'Lynx rufus',
+    ]);
+  });
+
+  it('editing one count on a multi-species image keeps the other species', () => {
+    const draftObs = [obs('Odocoileus hemionus', 3, 'Mule Deer'), obs('Canis latrans', 1, 'Coyote')];
+    const plan = buildSyncPlan(MULTI_IMAGES, { [K3]: draft({ mediaPath: K3, observations: draftObs }) }, null);
+    expect(plan.tagEdits).toHaveLength(1);
+    expect(plan.tagEdits[0].observations).toHaveLength(2);
+    const deer = plan.tagEdits[0].observations.find((o) => o.scientificName === 'Odocoileus hemionus');
+    expect(deer?.count).toBe(3);
+    expect(plan.tagEdits[0].observations.find((o) => o.scientificName === 'Canis latrans')).toBeTruthy();
+  });
+});
+
+// The headline round-trip proof: a multi-species image plus a draft that adds a
+// third species, run through the real merge, must keep ALL intended species.
+describe('buildSyncPlan → mergeObservations round trip', () => {
+  const KX = `${PREFIX}IMGX.JPG`;
+  const X_IMAGES: TagImage[] = [
+    {
+      key: KX,
+      fileName: 'IMGX.JPG',
+      deploymentId: DEP,
+      baseTimestamp: '2024-01-10T08:00:00',
+      baseObservations: [obs('Odocoileus hemionus', 1, 'Mule Deer'), obs('Canis latrans', 1, 'Coyote')],
+    },
+  ];
+  const X_OBS_CSV = serializeCsvRows([
+    obsRow(KX, '2024-01-10T08:00:00', 'Odocoileus hemionus'),
+    obsRow(KX, '2024-01-10T08:00:00', 'Canis latrans'),
+  ]);
+
+  it('retains all intended species for the image, never one row', () => {
+    const draftObs = [
+      obs('Odocoileus hemionus', 1, 'Mule Deer'),
+      obs('Canis latrans', 1, 'Coyote'),
+      obs('Lynx rufus', 1, 'Bobcat'),
+    ];
+    const plan = buildSyncPlan(X_IMAGES, { [KX]: draft({ mediaPath: KX, observations: draftObs }) }, null);
+    const merged = mergeObservations(X_OBS_CSV, plan.tagEdits);
+    const rows = parseObservations(merged).filter((r) => r.mediaId === KX);
+    expect(rows.map((r) => r.scientificName).sort()).toEqual([
+      'Canis latrans',
+      'Lynx rufus',
+      'Odocoileus hemionus',
+    ]);
+  });
+
+  it('preserve-by-inaction: a time-only edit leaves both species rows untouched', () => {
+    // Base has two species; the user changes ONLY the timestamp. The tag set is
+    // unchanged, so the edit must route to timeEdits (observations:[]) — never
+    // through mergeObservations — and both canonical rows survive byte-for-byte.
+    const seeded = blankDraft({ bucket: 'sparcd-x', uploadPrefix: PREFIX }, KX, DEP, {
+      observations: [obs('Odocoileus hemionus', 1, 'Mule Deer'), obs('Canis latrans', 1, 'Coyote')],
+    });
+    const plan = buildSyncPlan(
+      X_IMAGES,
+      { [KX]: { ...seeded, timeOverride: '2024-01-10T09:00:00', dirty: true } },
+      null,
+    );
+    expect(plan.tagEdits).toHaveLength(0);
+    expect(plan.timeEdits).toHaveLength(1);
+    // observations.csv is untouched (tagEdits empty) → both rows survive verbatim.
+    const merged = mergeObservations(X_OBS_CSV, plan.tagEdits);
+    expect(merged).toBe(X_OBS_CSV);
+    const rows = parseObservations(merged).filter((r) => r.mediaId === KX);
+    expect(rows).toHaveLength(2);
+    // The media row's col-4 timestamp is rewritten by the time edit.
+    const mediaCsv = serializeCsvRows([mediaRow(KX, '2024-01-10T08:00:00')]);
+    const mergedMedia = mergeMedia(mediaCsv, plan.timeEdits);
+    const mediaRowOut = parseCsvRows(mergedMedia).find((r) => r[MEDIA_COL.mediaId] === KX)!;
+    expect(mediaRowOut[MEDIA_COL.timestamp]).toBe('2024-01-10T09:00:00');
   });
 });
 

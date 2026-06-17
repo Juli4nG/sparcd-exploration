@@ -28,7 +28,7 @@ import {
   type TimeOffset,
 } from '@sparcd/camtrap';
 import type { TagImage } from './workspace';
-import type { DraftRecord } from './db';
+import type { DraftRecord, DraftObservation } from './db';
 import { sha256Hex } from './hash';
 import {
   ROLE_ORDER,
@@ -75,16 +75,30 @@ export type SyncPlan = {
   summary: DiffSummary;
 };
 
-const effField = <K extends keyof DraftRecord>(
-  draft: DraftRecord | undefined,
-  base: string | number,
-  key: K,
-): string | number => (draft ? (draft[key] as string | number) : base);
+/** Order-insensitive multiset equality of two observation arrays, comparing the
+ *  fields a sync actually writes: `{scientificName, count(≥1), commonName,
+ *  requested}`. Counts are floored to ≥1 on both sides so a base zero-count row
+ *  (`positiveCount` drops it on write) and a re-tag at count 1 compare equal on
+ *  count alone. */
+function observationsEqual(a: DraftObservation[], b: DraftObservation[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (o: DraftObservation): string =>
+    JSON.stringify([o.scientificName, Math.max(1, o.count), o.commonName ?? '', o.requestedSpecies ?? '']);
+  const ca = new Map<string, number>();
+  const cb = new Map<string, number>();
+  for (const o of a) ca.set(key(o), (ca.get(key(o)) ?? 0) + 1);
+  for (const o of b) cb.set(key(o), (cb.get(key(o)) ?? 0) + 1);
+  if (ca.size !== cb.size) return false;
+  for (const [k, n] of ca) if (cb.get(k) !== n) return false;
+  return true;
+}
 
 /**
  * Diff the loaded drafts against the canonical base into the edits the merge
- * helpers consume. A draft that equals its base produces no edit (re-applying
- * the same species, or a questionable-only toggle, is not a canonical change).
+ * helpers consume. A draft whose observation multiset equals its base produces
+ * no tag edit (re-applying the same species, or a questionable-only toggle, is
+ * not a canonical change). The full observation array flows through, so a
+ * multi-species image is never collapsed to one row.
  */
 export function buildSyncPlan(
   images: TagImage[],
@@ -100,25 +114,17 @@ export function buildSyncPlan(
     // must defer to the canonical base so it is never re-applied over a remote
     // change it didn't make.
     const d = drafts[img.key]?.dirty ? drafts[img.key] : undefined;
-    const label = String(effField(d, img.baseLabel, 'label'));
-    const count = Number(effField(d, img.baseCount, 'count'));
-    const commonName = String(effField(d, img.baseCommonName, 'commonName'));
-    const requested = String(effField(d, img.baseRequested, 'requestedSpecies'));
+    const obs = d ? d.observations : img.baseObservations;
 
     const corrected = correctedTimestamp(img.baseTimestamp, offset, d?.timeOverride ?? null);
     const timeChanged = !!img.baseTimestamp && corrected !== img.baseTimestamp;
-
-    const tagChanged =
-      label !== img.baseLabel ||
-      count !== img.baseCount ||
-      commonName !== img.baseCommonName ||
-      requested !== img.baseRequested;
+    const tagChanged = !observationsEqual(obs, img.baseObservations);
 
     if (timeChanged) summary.timeCorrections++;
 
     if (tagChanged) {
-      const wasTagged = !!img.baseLabel;
-      const nowTagged = !!label;
+      const wasTagged = img.baseObservations.length > 0;
+      const nowTagged = obs.length > 0;
       if (!wasTagged && nowTagged) summary.additions++;
       else if (wasTagged && !nowTagged) summary.removals++;
       else summary.modifications++;
@@ -128,16 +134,12 @@ export function buildSyncPlan(
         deploymentId: img.deploymentId,
         timestamp: corrected,
         mediaTimestamp: timeChanged ? corrected : undefined,
-        observations: label
-          ? [
-              {
-                scientificName: label,
-                count: Math.max(1, count),
-                commonName: commonName || undefined,
-                requestedSpecies: requested || undefined,
-              },
-            ]
-          : [],
+        observations: obs.map((o) => ({
+          scientificName: o.scientificName,
+          count: Math.max(1, o.count),
+          commonName: o.commonName || undefined,
+          requestedSpecies: o.requestedSpecies || undefined,
+        })),
       });
     } else if (timeChanged) {
       // Time correction on an image whose species rows don't change. Goes to

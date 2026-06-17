@@ -7,6 +7,7 @@ import { useTagImages, useSpecies } from '../lib/queries';
 import { parseCollectionKey, presignImage } from '../lib/s3';
 import { correctedTimestamp, shiftTimestamp } from '@sparcd/camtrap';
 import { SpeciesPanel } from '../components/SpeciesPanel';
+import { AppliedSpecies } from '../components/AppliedSpecies';
 import { Cheatsheet } from '../components/Cheatsheet';
 import { SyncDialog } from '../components/SyncDialog';
 import { SnapshotsDialog } from '../components/SnapshotsDialog';
@@ -54,9 +55,10 @@ export function Tag() {
   const drafts = useDraftStore((s) => s.drafts);
   const timeOffset = useDraftStore((s) => s.timeOffset);
   const loadUpload = useDraftStore((s) => s.loadUpload);
-  const applyTagFn = useDraftStore((s) => s.applyTag);
-  const applyTagManyFn = useDraftStore((s) => s.applyTagMany);
-  const detagManyFn = useDraftStore((s) => s.detagMany);
+  const addSpeciesFn = useDraftStore((s) => s.addSpecies);
+  const removeSpeciesFn = useDraftStore((s) => s.removeSpecies);
+  const setSpeciesCountFn = useDraftStore((s) => s.setSpeciesCount);
+  const detagFn = useDraftStore((s) => s.detag);
   const setQuestionableManyFn = useDraftStore((s) => s.setQuestionableMany);
   const setTimeOffsetFn = useDraftStore((s) => s.setTimeOffset);
   const setTimeOverrideFn = useDraftStore((s) => s.setTimeOverride);
@@ -73,7 +75,6 @@ export function Tag() {
   const [focus, setFocus] = useState(0);
   const [anchor, setAnchor] = useState(0); // last single pick — the base for Shift-range
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [count, setCount] = useState(1);
   const [filter, setFilter] = useState('');
   const [capturingFor, setCapturingFor] = useState<string | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
@@ -162,23 +163,17 @@ export function Tag() {
       .map((img) => ({
         mediaPath: img.key,
         deploymentId: img.deploymentId,
-        // Seed a fresh draft from the canonical base so a partial edit (e.g.
-        // toggling questionable) keeps the image's existing species.
-        base: {
-          label: img.baseLabel,
-          commonName: img.baseCommonName,
-          count: img.baseCount,
-          requestedSpecies: img.baseRequested,
-        },
+        // Seed a fresh draft from the FULL canonical base set so a partial edit
+        // (adding one species, toggling questionable) keeps every existing one.
+        base: { observations: img.baseObservations },
       }));
   };
 
   const apply = (tag: AppliedTag) => {
     const targets = targetsOf();
     if (!targets.length) return;
-    if (targets.length === 1) applyTagFn(ctx, targets[0].mediaPath, targets[0].deploymentId, tag);
-    else applyTagManyFn(ctx, targets, tag);
-    if (tag.label) pushRecent(tag.label);
+    addSpeciesFn(ctx, targets, tag);
+    if (tag.scientificName) pushRecent(tag.scientificName);
   };
 
   // --- Mouse selection gestures (single / Shift-range / Cmd-additive). --------
@@ -228,7 +223,7 @@ export function Tag() {
     assignKey,
     apply,
     targetsOf,
-    detagMany: detagManyFn,
+    detag: detagFn,
     setQuestionableMany: setQuestionableManyFn,
     drafts,
     flushSaves,
@@ -238,7 +233,6 @@ export function Tag() {
     filterRef,
     speciesList,
     filter,
-    count,
     view,
     setView,
   };
@@ -390,7 +384,7 @@ export function Tag() {
               onClearTime={() =>
                 current && setTimeOverrideFn(ctx, current.key, current.deploymentId, null)
               }
-              onDetag={() => detagManyFn(ctx, targetsOf())}
+              onDetag={() => detagFn(ctx, targetsOf())}
             />
             <SpeciesPanel {...speciesPanelProps()} />
           </div>
@@ -415,10 +409,9 @@ export function Tag() {
   );
 
   function speciesPanelProps() {
+    const observations = eff?.observations ?? [];
     return {
       species: speciesList,
-      count,
-      onCountChange: setCount,
       onApply: apply,
       filter,
       onFilterChange: setFilter,
@@ -428,9 +421,28 @@ export function Tag() {
       onStartCapture: setCapturingFor,
       onClearKey: clearKey,
       recent,
-      currentLabel: eff?.label ?? '',
+      appliedSet: new Set(observations.map((o) => o.scientificName)),
+      hasFocus: !!current,
       selectionCount: selected.size,
       disabled: !current,
+      // The compact applied-species strip edits the focused image only. Mounted
+      // in the panel header so it covers both Overview and Focus layouts (the
+      // same panel renders in both) with one site.
+      headerSlot: (
+        <AppliedSpecies
+          observations={observations}
+          disabled={!current}
+          onSetCount={(sci, n) =>
+            current &&
+            setSpeciesCountFn(ctx, current.key, current.deploymentId, { observations: current.baseObservations }, sci, n)
+          }
+          onRemove={(sci) =>
+            current &&
+            removeSpeciesFn(ctx, current.key, current.deploymentId, { observations: current.baseObservations }, sci)
+          }
+          onDetagAll={() => detagFn(ctx, targetsOf())}
+        />
+      ),
     };
   }
 }
@@ -486,12 +498,13 @@ function FocusPane({
                 questionable
               </span>
             )}
-            <TagChip eff={eff} />
+            {/* The applied species themselves render in the SpeciesPanel header
+                strip on the right; the footer keeps only questionable + Detag. */}
             <button
               onClick={onDetag}
-              disabled={!eff.label && eff.source !== 'base'}
+              disabled={eff.observations.length === 0}
               className="text-[13px] border border-rule px-2.5 py-1 text-inkSoft hover:text-ink hover:border-ink disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-              title="Remove the species from this image"
+              title="Remove every species from this image"
             >
               Detag
             </button>
@@ -526,22 +539,6 @@ function Segmented({
         </button>
       ))}
     </div>
-  );
-}
-
-function TagChip({ eff }: { eff: Effective }) {
-  if (!eff.label) return <span className="text-[13px] font-mono text-inkMute">untagged</span>;
-  const isGhost = eff.label === GHOST.label;
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[13px] border ${
-        isGhost ? 'border-rule text-inkSoft' : 'border-ink text-ink'
-      }`}
-    >
-      {isGhost ? '◯ Ghost' : eff.commonName || eff.label}
-      {eff.count > 1 && <span className="font-mono text-inkMute">×{eff.count}</span>}
-      {eff.requested && <span className="font-mono text-inkMute text-[11px]">requested</span>}
-    </span>
   );
 }
 
@@ -758,7 +755,7 @@ type HandlerState = {
   assignKey: (sci: string, key: string) => void;
   apply: (tag: AppliedTag) => void;
   targetsOf: () => TagTarget[];
-  detagMany: (ctx: UploadCtx, targets: TagTarget[]) => void;
+  detag: (ctx: UploadCtx, targets: TagTarget[]) => void;
   setQuestionableMany: (ctx: UploadCtx, targets: TagTarget[], value: boolean) => void;
   drafts: Record<string, DraftRecord>;
   flushSaves: () => Promise<void>;
@@ -768,7 +765,6 @@ type HandlerState = {
   filterRef: React.RefObject<HTMLInputElement>;
   speciesList: Species[];
   filter: string;
-  count: number;
   view: View;
   setView: (v: View) => void;
 };
@@ -833,7 +829,7 @@ function handleKey(e: KeyboardEvent, s: HandlerState): void {
           (sp) =>
             sp.commonName.toLowerCase().includes(q) || sp.scientificName.toLowerCase().includes(q),
         );
-      if (match) s.apply({ label: match.scientificName, commonName: match.commonName, count: s.count });
+      if (match) s.apply({ scientificName: match.scientificName, commonName: match.commonName, count: 1 });
       s.filterRef.current?.blur();
     }
     return;
@@ -916,6 +912,6 @@ function handleKey(e: KeyboardEvent, s: HandlerState): void {
   const action = s.keyMap.get(e.key.toLowerCase());
   if (!action || !current) return;
   e.preventDefault();
-  if (action.kind === 'ghost') s.apply({ label: GHOST.label, commonName: GHOST.commonName, count: s.count });
-  else s.apply({ label: action.species.scientificName, commonName: action.species.commonName, count: s.count });
+  if (action.kind === 'ghost') s.apply({ scientificName: GHOST.label, commonName: GHOST.commonName, count: 1 });
+  else s.apply({ scientificName: action.species.scientificName, commonName: action.species.commonName, count: 1 });
 }

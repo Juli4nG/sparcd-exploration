@@ -6,6 +6,17 @@ import { effectiveOf, isEditedFromBase } from '../lib/effective';
 import { isRangeFullySelected } from '../lib/selection';
 import type { Burst, BurstGrouping } from '../lib/bursts';
 import type { TagImage } from '../lib/workspace';
+import type { DraftObservation } from '../lib/db';
+
+/** A one-line label for an image's effective species set: the first species (with
+ *  count when >1), plus `+N` when more follow. Ghost reads as "Ghost". */
+function summarize(obs: DraftObservation[]): string {
+  if (!obs.length) return '';
+  const first = obs[0];
+  const name = first.scientificName === 'Casper' ? 'Ghost' : first.commonName || first.scientificName;
+  const head = first.count > 1 ? `${name} ×${first.count}` : name;
+  return obs.length > 1 ? `${head} +${obs.length - 1}` : head;
+}
 
 // The Overview is the primary bulk-tagging surface: a virtualized, burst-banded
 // view of an upload in either grid or list form. Only visible cells mount, so a
@@ -238,11 +249,8 @@ function ListCell({
           {img.fileName}
         </span>
         <span className="block text-[12px] truncate">
-          {eff.label ? (
-            <span className="text-ink">
-              {eff.commonName || eff.label}
-              {eff.count > 1 && <span className="text-inkMute"> ×{eff.count}</span>}
-            </span>
+          {eff.observations.length ? (
+            <span className="text-ink">{summarize(eff.observations)}</span>
           ) : (
             <span className="text-inkMute">untagged</span>
           )}
@@ -307,11 +315,8 @@ function GridCell({
           </span>
         )}
         <span className="block text-[11px] truncate">
-          {eff.label ? (
-            <span className="text-ink">
-              {eff.commonName || eff.label}
-              {eff.count > 1 && <span className="text-inkMute"> ×{eff.count}</span>}
-            </span>
+          {eff.observations.length ? (
+            <span className="text-ink">{summarize(eff.observations)}</span>
           ) : (
             <span className="text-inkMute font-mono">{img.fileName}</span>
           )}

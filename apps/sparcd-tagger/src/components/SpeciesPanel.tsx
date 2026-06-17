@@ -1,4 +1,4 @@
-import { useMemo, type RefObject } from 'react';
+import { useMemo, type ReactNode, type RefObject } from 'react';
 import Fuse from 'fuse.js';
 import type { Species } from '../lib/species';
 import type { AppliedTag } from '../lib/drafts';
@@ -12,9 +12,7 @@ import { GHOST } from '../lib/drafts';
 
 export type SpeciesPanelProps = {
   species: Species[];
-  count: number;
-  onCountChange: (n: number) => void;
-  onApply: (tag: AppliedTag) => void;
+  onApply: (tag: AppliedTag) => void; // add-only; count omitted defaults to 1
   filter: string;
   onFilterChange: (v: string) => void;
   filterRef: RefObject<HTMLInputElement>;
@@ -23,9 +21,11 @@ export type SpeciesPanelProps = {
   onStartCapture: (scientificName: string) => void;
   onClearKey: (scientificName: string) => void;
   recent: string[]; // scientificNames, most-recent first
-  currentLabel: string; // applied label on the focused image, for highlight
+  appliedSet: Set<string>; // scientificNames applied on the focused image (✓ + add-only NO-OP)
+  hasFocus: boolean; // an image is focused → "Add another" framing
   selectionCount: number; // >0 → applying a species hits the whole selection
   disabled: boolean; // no image focused
+  headerSlot?: ReactNode; // the compact applied-species strip, under the filter
 };
 
 const GHOST_KEY = 'G';
@@ -78,16 +78,10 @@ export function SpeciesPanel(props: SpeciesPanelProps) {
           spellCheck={false}
           aria-label="Filter species"
         />
-        <label className="flex items-center gap-2 text-[13px] font-body text-inkSoft">
-          Count
-          <input
-            type="number"
-            min={1}
-            value={props.count}
-            onChange={(e) => props.onCountChange(Math.max(1, Number(e.target.value) || 1))}
-            className="w-20 bg-paper border border-rule px-2 py-1 text-[14px] font-mono text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-          />
-        </label>
+        {props.headerSlot}
+        {props.hasFocus && props.appliedSet.size > 0 && (
+          <p className="text-[11px] font-body tracking-[0.12em] uppercase text-inkSoft">Add another</p>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
@@ -97,9 +91,9 @@ export function SpeciesPanel(props: SpeciesPanelProps) {
           common="Ghost"
           scientific="empty / false-trigger"
           badge={GHOST_KEY}
-          active={props.currentLabel === GHOST.label}
+          applied={props.appliedSet.has(GHOST.label)}
           disabled={props.disabled}
-          onApply={() => props.onApply({ label: GHOST.label, commonName: GHOST.commonName, count: props.count })}
+          onApply={() => props.onApply({ scientificName: GHOST.label, commonName: GHOST.commonName, count: 1 })}
         />
 
         {ordered.map((s) => (
@@ -110,9 +104,9 @@ export function SpeciesPanel(props: SpeciesPanelProps) {
             scientific={s.scientificName}
             badge={props.bindingFor(s.scientificName)}
             capturing={props.capturingFor === s.scientificName}
-            active={props.currentLabel === s.scientificName}
+            applied={props.appliedSet.has(s.scientificName)}
             disabled={props.disabled}
-            onApply={() => props.onApply({ label: s.scientificName, commonName: s.commonName, count: props.count })}
+            onApply={() => props.onApply({ scientificName: s.scientificName, commonName: s.commonName, count: 1 })}
             onStartCapture={() => props.onStartCapture(s.scientificName)}
             onClearKey={props.bindingFor(s.scientificName) ? () => props.onClearKey(s.scientificName) : undefined}
           />
@@ -125,7 +119,7 @@ export function SpeciesPanel(props: SpeciesPanelProps) {
             scientific={`“${trimmed}” → [REQUESTED_SPECIES]`}
             disabled={props.disabled}
             onApply={() =>
-              props.onApply({ label: trimmed, commonName: '', count: props.count, requestedSpecies: trimmed })
+              props.onApply({ scientificName: trimmed, commonName: '', count: 1, requestedSpecies: trimmed })
             }
           />
         )}
@@ -145,7 +139,7 @@ type RowProps = {
   scientific: string;
   badge?: string | null;
   capturing?: boolean;
-  active?: boolean;
+  applied?: boolean; // already on the focused image → ✓, clicking is a NO-OP add
   disabled: boolean;
   onApply: () => void;
   onStartCapture?: () => void;
@@ -156,14 +150,14 @@ function Row(p: RowProps) {
   return (
     <div
       className={`group flex items-center gap-3 px-3 py-2 border-b border-ruleSoft ${
-        p.active ? 'bg-mark' : 'hover:bg-panelHover'
+        p.applied ? 'bg-mark' : 'hover:bg-panelHover'
       }`}
     >
       <button
         onClick={p.onApply}
         disabled={p.disabled}
         className="flex items-center gap-3 flex-1 min-w-0 text-left disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2"
-        title={p.disabled ? 'Focus an image first' : `Apply ${p.common}`}
+        title={p.disabled ? 'Focus an image first' : p.applied ? `${p.common} already applied` : `Apply ${p.common}`}
       >
         {p.iconUrl ? (
           <img
@@ -181,6 +175,11 @@ function Row(p: RowProps) {
           <span className="block text-[14px] text-ink truncate">{p.common}</span>
           <span className="block text-[12px] text-inkMute font-mono italic truncate">{p.scientific}</span>
         </span>
+        {p.applied && (
+          <span className="ml-auto text-accent text-[13px] font-mono shrink-0" title="Applied" aria-label="Applied">
+            ✓
+          </span>
+        )}
       </button>
 
       {/* Actions sit before the key badge so the badge stays anchored to the

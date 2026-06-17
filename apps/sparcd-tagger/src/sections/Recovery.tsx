@@ -51,7 +51,7 @@ function groupDirty(rows: DraftRecord[]): Group[] {
       byUpload.set(id, g);
     }
     g.count++;
-    if (r.label) g.taggedCount++;
+    if (r.observations.length) g.taggedCount++;
     if (r.lastEdited > g.lastEdited) g.lastEdited = r.lastEdited;
   }
   return [...byUpload.values()].sort((a, b) => b.lastEdited.localeCompare(a.lastEdited));

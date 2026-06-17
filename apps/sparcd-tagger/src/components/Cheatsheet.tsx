@@ -20,9 +20,10 @@ const GROUPS: { title: string; rows: Shortcut[] }[] = [
     title: 'Tag',
     rows: [
       { keys: ['Space'], action: 'Open species filter' },
-      { keys: ['Enter'], action: 'Apply top filter match' },
-      { keys: ['key'], action: 'Apply the species bound to that key' },
-      { keys: ['G'], action: 'Ghost (empty / false-trigger)' },
+      { keys: ['Enter'], action: 'Add top filter match (add-only)' },
+      { keys: ['key'], action: 'Add the species bound to that key' },
+      { keys: ['G'], action: 'Ghost (clears real species)' },
+      { keys: ['✕'], action: 'Chip ✕ removes one; Detag clears all' },
       { keys: ['X'], action: 'Mark questionable' },
     ],
   },
