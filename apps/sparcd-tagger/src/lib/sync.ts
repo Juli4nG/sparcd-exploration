@@ -86,8 +86,8 @@ function observationsEqual(a: DraftObservation[], b: DraftObservation[]): boolea
     JSON.stringify([o.scientificName, Math.max(1, o.count), o.commonName ?? '', o.requestedSpecies ?? '']);
   const ca = new Map<string, number>();
   const cb = new Map<string, number>();
-  for (const o of a) ca.set(key(o), (ca.get(key(o)) ?? 0) + 1);
-  for (const o of b) cb.set(key(o), (cb.get(key(o)) ?? 0) + 1);
+  for (const o of a) { const k = key(o); ca.set(k, (ca.get(k) ?? 0) + 1); }
+  for (const o of b) { const k = key(o); cb.set(k, (cb.get(k) ?? 0) + 1); }
   if (ca.size !== cb.size) return false;
   for (const [k, n] of ca) if (cb.get(k) !== n) return false;
   return true;

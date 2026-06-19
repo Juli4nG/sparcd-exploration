@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Thumb } from './Thumb';
 import { useDraftStore } from '../lib/drafts';
-import { effectiveOf, isEditedFromBase } from '../lib/effective';
+import { effectiveOf, isEditedFromBase, isGhostObs } from '../lib/effective';
 import { isRangeFullySelected } from '../lib/selection';
 import type { Burst, BurstGrouping } from '../lib/bursts';
 import type { TagImage } from '../lib/workspace';
@@ -13,7 +13,7 @@ import type { DraftObservation } from '../lib/db';
 function summarize(obs: DraftObservation[]): string {
   if (!obs.length) return '';
   const first = obs[0];
-  const name = first.scientificName === 'Casper' ? 'Ghost' : first.commonName || first.scientificName;
+  const name = isGhostObs(first) ? 'Ghost' : first.commonName || first.scientificName;
   const head = first.count > 1 ? `${name} ×${first.count}` : name;
   return obs.length > 1 ? `${head} +${obs.length - 1}` : head;
 }
