@@ -13,7 +13,11 @@ export async function posterFor(file: File): Promise<Blob | undefined> {
 
   try {
     await new Promise<void>((resolve, reject) => {
-      video.onloadeddata = () => resolve();
+      // `preload='metadata'` is not required to ever fire `loadeddata`, so wait on
+      // `loadedmetadata` (duration + dimensions); the seek below forces the target
+      // frame to load and fires `onseeked`. Waiting on `loadeddata` here can hang
+      // forever — leaking the blob URL since `finally` would never run.
+      video.onloadedmetadata = () => resolve();
       video.onerror = () => reject(new Error('video decode failed'));
     });
     // A frame near the start, but past 0 so it isn't a black lead-in.

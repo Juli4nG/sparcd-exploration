@@ -127,16 +127,21 @@ async function makeThumbnail(file: File): Promise<Partial<ProcessResponse>> {
   }
 }
 
-// MP4 `moov/mvhd` creation time, best-effort. The atom tree is walked over slices
-// rather than buffering the whole file. Times are seconds since 1904-01-01 UTC
-// (the QuickTime epoch). Returns naive components in UTC; a missing/zero time or
-// any read failure → undefined (routes to manual entry, like a timestamp-absent
+// MP4 `moov/mvhd` creation time, best-effort. Times are seconds since 1904-01-01
+// UTC (the QuickTime epoch). Returns naive components in UTC; a missing/zero time
+// or any read failure → undefined (routes to manual entry, like a timestamp-absent
 // image). We do not validate malformed atoms beyond "no usable time".
 const MP4_EPOCH_OFFSET_S = 2_082_844_800; // seconds between 1904-01-01 and 1970-01-01
 
+// Only the leading slice is read: a fast-start MP4 keeps `moov` (and `mvhd`) at the
+// front, so this avoids allocating a multi-GB clip on the worker heap. A
+// non-fast-start (moov-at-end) file won't be found here and falls through to manual
+// entry — the same path as a timestamp-absent file.
+const MP4_META_SCAN_BYTES = 4 * 1024 * 1024;
+
 async function readMp4Meta(file: File): Promise<Partial<ProcessResponse>> {
   try {
-    const buf = await file.arrayBuffer();
+    const buf = await file.slice(0, MP4_META_SCAN_BYTES).arrayBuffer();
     const view = new DataView(buf);
     const len = view.byteLength;
 
