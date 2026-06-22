@@ -258,6 +258,7 @@ export function Tag() {
 
   const draft = current ? drafts[current.key] : undefined;
   const eff = current ? effectiveOf(current, draft) : null;
+  const currentBase = current ? { observations: current.baseObservations } : undefined;
   const nDirty = dirtyCount(drafts);
   const hasUploadShift = offsetActive(timeOffset);
   const correctedTs = current
@@ -379,10 +380,10 @@ export function Tag() {
               hasUploadShift={hasUploadShift}
               overridden={!!draft?.timeOverride}
               onSetTime={(iso) =>
-                current && setTimeOverrideFn(ctx, current.key, current.deploymentId, iso)
+                current && setTimeOverrideFn(ctx, current.key, current.deploymentId, currentBase, iso)
               }
               onClearTime={() =>
-                current && setTimeOverrideFn(ctx, current.key, current.deploymentId, null)
+                current && setTimeOverrideFn(ctx, current.key, current.deploymentId, currentBase, null)
               }
               onDetag={() => detagFn(ctx, targetsOf())}
             />
@@ -433,14 +434,21 @@ export function Tag() {
           observations={observations}
           disabled={!current}
           onSetCount={(sci, n) =>
-            current &&
-            setSpeciesCountFn(ctx, current.key, current.deploymentId, { observations: current.baseObservations }, sci, n)
+            current && setSpeciesCountFn(ctx, current.key, current.deploymentId, currentBase, sci, n)
           }
           onRemove={(sci) =>
-            current &&
-            removeSpeciesFn(ctx, current.key, current.deploymentId, { observations: current.baseObservations }, sci)
+            current && removeSpeciesFn(ctx, current.key, current.deploymentId, currentBase, sci)
           }
-          onDetagAll={() => detagFn(ctx, targetsOf())}
+          onDetagAll={() =>
+            current &&
+            detagFn(ctx, [
+              {
+                mediaPath: current.key,
+                deploymentId: current.deploymentId,
+                base: currentBase,
+              },
+            ])
+          }
         />
       ),
     };

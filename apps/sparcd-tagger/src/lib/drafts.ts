@@ -125,11 +125,13 @@ type DraftState = {
    *  Persists to the `uploads` record so the next sync writes corrected times. */
   setTimeOffset: (ctx: UploadCtx, offset: TimeOffsetRecord | null) => void;
   /** Set (or clear with null) one image's per-image corrected timestamp, on top
-   *  of the upload offset. Marks the draft dirty so it syncs and surfaces. */
+   *  of the upload offset. Seeds a fresh draft from base so time-only edits never
+   *  drop existing canonical species rows. */
   setTimeOverride: (
     ctx: UploadCtx,
     mediaPath: string,
     deploymentId: string,
+    base: BaseSeed | undefined,
     iso: string | null,
   ) => void;
 
@@ -267,8 +269,8 @@ export const useDraftStore = create<DraftState>((set, get) => {
       void setUploadTimeOffset(ctx.bucket, ctx.uploadPrefix, offset);
     },
 
-    setTimeOverride: (ctx, mediaPath, deploymentId, iso) =>
-      mutateMany(ctx, [{ mediaPath, deploymentId }], { timeOverride: iso }),
+    setTimeOverride: (ctx, mediaPath, deploymentId, base, iso) =>
+      mutateMany(ctx, [{ mediaPath, deploymentId, base }], { timeOverride: iso }),
 
     setQuestionableMany: (ctx, targets, value) =>
       mutateMany(ctx, targets, { questionable: value }),
