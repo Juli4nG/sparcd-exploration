@@ -121,6 +121,17 @@ describe('draft store — add-only over a base multi-species image', () => {
     expect(d.observations.find((o) => o.scientificName === 'Canis latrans')!.count).toBe(1);
   });
 
+  it('setTimeOverride on a fresh draft preserves the full base species set', () => {
+    useDraftStore.getState().setTimeOverride(CTX, PATH, DEP, BASE, '2024-01-10T09:00:00');
+    const d = useDraftStore.getState().drafts[PATH];
+    expect(d.timeOverride).toBe('2024-01-10T09:00:00');
+    expect(d.observations.map((o) => o.scientificName)).toEqual([
+      'Odocoileus hemionus',
+      'Canis latrans',
+    ]);
+    expect(d.dirty).toBe(true);
+  });
+
   it('detag clears all observations', () => {
     useDraftStore.getState().detag(CTX, [target()]);
     expect(useDraftStore.getState().drafts[PATH].observations).toEqual([]);
