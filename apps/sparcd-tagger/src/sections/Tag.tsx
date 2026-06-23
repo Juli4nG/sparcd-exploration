@@ -13,6 +13,8 @@ import { SyncDialog } from '../components/SyncDialog';
 import { SnapshotsDialog } from '../components/SnapshotsDialog';
 import { TimeShiftModal } from '../components/TimeShiftModal';
 import { PerImageTime } from '../components/PerImageTime';
+import { ImageAdjustments } from '../components/ImageAdjustments';
+import { cssFilter, NEUTRAL, type Adjustments } from '../lib/adjustments';
 import { Overview, type PickMods, type ViewKind } from '../components/Overview';
 import { groupBursts, type BurstGrouping } from '../lib/bursts';
 import { offsetActive, formatOffsetDelta } from '../lib/timeshift';
@@ -477,10 +479,26 @@ function FocusPane({
   onClearTime: () => void;
   onDetag: () => void;
 }) {
+  // View-only display adjustments live here so they reset to neutral when the
+  // user leaves Focus (this component unmounts) and stay sticky while paging
+  // through images within a Focus session — the night-frame burst workflow.
+  const [adjustments, setAdjustments] = useState<Adjustments>(NEUTRAL);
+  const filter = useMemo(() => cssFilter(adjustments), [adjustments]);
+  const showAdjust = !!current && !isVideoKey(current.key);
+
   return (
     <div className="flex flex-col min-h-0 bg-paper">
       <div className="relative flex-1 min-h-0 grid place-items-center p-4 overflow-hidden">
-        {current && <FocusImage objectKey={current.key} alt={current.fileName} />}
+        {current && <FocusImage objectKey={current.key} alt={current.fileName} filter={filter} />}
+        {showAdjust && (
+          <div className="absolute bottom-4 left-4 z-10">
+            <ImageAdjustments
+              value={adjustments}
+              onChange={setAdjustments}
+              onReset={() => setAdjustments(NEUTRAL)}
+            />
+          </div>
+        )}
       </div>
       {current && eff && (
         <div className="shrink-0 border-t border-rule bg-panel px-5 py-3 flex items-center gap-5 flex-wrap">
@@ -550,7 +568,15 @@ function Segmented({
   );
 }
 
-function FocusImage({ objectKey, alt }: { objectKey: string; alt: string }) {
+function FocusImage({
+  objectKey,
+  alt,
+  filter,
+}: {
+  objectKey: string;
+  alt: string;
+  filter?: string;
+}) {
   const cfg = useStore((s) => s.s3Config);
   const connectionId = useStore((s) => s.connectionId);
   const collectionKey = useStore((s) => s.selectedCollectionKey);
@@ -568,7 +594,7 @@ function FocusImage({ objectKey, alt }: { objectKey: string; alt: string }) {
     return <div className="text-[13px] font-mono text-warn">Could not load this image.</div>;
   if (!data) return <div className="text-[13px] font-mono text-inkMute">…</div>;
   if (isVideoKey(objectKey)) return <FocusVideo src={data} alt={alt} resetKey={objectKey} />;
-  return <ZoomableImage src={data} alt={alt} resetKey={objectKey} />;
+  return <ZoomableImage src={data} alt={alt} resetKey={objectKey} filter={filter} />;
 }
 
 // Video media plays with native controls. No zoom/pan/Lightbox: the
@@ -600,7 +626,17 @@ const ZOOM_PROPS = {
   panning: { velocityDisabled: true },
 };
 
-function ZoomableImage({ src, alt, resetKey }: { src: string; alt: string; resetKey: string }) {
+function ZoomableImage({
+  src,
+  alt,
+  resetKey,
+  filter,
+}: {
+  src: string;
+  alt: string;
+  resetKey: string;
+  filter?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   return (
@@ -621,6 +657,7 @@ function ZoomableImage({ src, alt, resetKey }: { src: string; alt: string; reset
                 src={src}
                 alt={alt}
                 draggable={false}
+                style={filter ? { filter } : undefined}
                 className="w-full h-full object-contain select-none"
               />
             </TransformComponent>
@@ -633,12 +670,22 @@ function ZoomableImage({ src, alt, resetKey }: { src: string; alt: string; reset
           </>
         )}
       </TransformWrapper>
-      {expanded && <Lightbox src={src} alt={alt} onClose={() => setExpanded(false)} />}
+      {expanded && <Lightbox src={src} alt={alt} filter={filter} onClose={() => setExpanded(false)} />}
     </>
   );
 }
 
-function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+function Lightbox({
+  src,
+  alt,
+  filter,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  filter?: string;
+  onClose: () => void;
+}) {
   const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -672,6 +719,7 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
                   src={src}
                   alt={alt}
                   draggable={false}
+                  style={filter ? { filter } : undefined}
                   className="w-full h-full object-contain select-none"
                 />
               </TransformComponent>
