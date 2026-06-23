@@ -7,7 +7,9 @@ import type { FileAccessMode } from './lib/db';
 import { validateBatch, type FileValidation } from './lib/validation';
 import { clearClientCache } from './lib/s3';
 import { localTimeZone, type NaiveDateTime } from './lib/exifTime';
+import type { ElevationUnit } from './lib/coords';
 
+export type { ElevationUnit };
 export type Section = 'new' | 'history' | 'settings';
 export type WizardStep = 'drop' | 'inspect' | 'assign' | 'upload';
 export type Theme = 'light' | 'dark';
@@ -33,6 +35,7 @@ type UploaderState = {
   connectionId: number; // increments on connect/disconnect to scope client-side caches
   section: Section;
   theme: Theme;
+  elevationUnit: ElevationUnit; // display pref for location elevation (persisted)
   step: WizardStep;
   files: FileEntry[];
   validations: Record<string, FileValidation>;
@@ -55,6 +58,7 @@ type UploaderState = {
   disconnect: () => void;
   setSection: (section: Section) => void;
   toggleTheme: () => void;
+  setElevationUnit: (unit: ElevationUnit) => void;
   setStep: (step: WizardStep) => void;
   setScanning: (scanning: boolean) => void;
   setProcessing: (processing: boolean) => void;
@@ -89,6 +93,7 @@ export const useStore = create<UploaderState>()(
       connectionId: 0,
       section: 'new',
       theme: 'light',
+      elevationUnit: 'meters',
       step: 'drop',
       files: [],
       validations: {},
@@ -133,6 +138,7 @@ export const useStore = create<UploaderState>()(
       },
       setSection: (section) => set({ section }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
+      setElevationUnit: (elevationUnit) => set({ elevationUnit }),
       setStep: (step) => set({ step }),
       setScanning: (scanning) => set({ scanning }),
       setProcessing: (processing) => set({ processing }),
@@ -241,7 +247,7 @@ export const useStore = create<UploaderState>()(
     {
       name: 'sparcd-uploader-session',
       storage: createJSONStorage(() => sessionStorage),
-      partialize: (s) => ({ s3Config: s.s3Config, theme: s.theme }),
+      partialize: (s) => ({ s3Config: s.s3Config, theme: s.theme, elevationUnit: s.elevationUnit }),
     },
   ),
 );

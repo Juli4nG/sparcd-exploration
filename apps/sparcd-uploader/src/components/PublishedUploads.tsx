@@ -67,6 +67,7 @@ function UploadCard({
   const cfg = useStore((s) => s.s3Config);
   const user = useStore((s) => s.uploaderUser);
   const dryRun = useStore((s) => s.dryRun);
+  const elevationUnit = useStore((s) => s.elevationUnit);
 
   // UploadMeta.json is an unvalidated JSON cast (older/foreign files may drift),
   // so default the fields the display reads.
@@ -258,7 +259,12 @@ function UploadCard({
 
       {mode === 'deployment' && (
         <div className="space-y-2 pt-1">
-          <DeploymentPicker locations={locations} value={locationKey} onChange={setLocationKey} />
+          <DeploymentPicker
+            locations={locations}
+            value={locationKey}
+            onChange={setLocationKey}
+            elevationUnit={elevationUnit}
+          />
           <div className="flex items-center gap-2">
             <button
               disabled={busy || !locationKey}

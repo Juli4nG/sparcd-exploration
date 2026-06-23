@@ -39,6 +39,8 @@ export function Assign() {
   const setSelectedLocationKey = useStore((s) => s.setSelectedLocationKey);
   const selectedBucket = useStore((s) => s.selectedBucket);
   const setSelectedBucket = useStore((s) => s.setSelectedBucket);
+  const elevationUnit = useStore((s) => s.elevationUnit);
+  const setElevationUnit = useStore((s) => s.setElevationUnit);
   const files = useStore((s) => s.files);
 
   const { data, isLoading, isError, error } = useLocations(s3Config, connectionId);
@@ -162,15 +164,36 @@ export function Assign() {
                 locations={collectionLocations}
                 value={selectedLocationKey}
                 onChange={setSelectedLocationKey}
+                elevationUnit={elevationUnit}
               />
             )}
-            <p className="font-body text-[12px] text-inkMute">
-              <span className="font-mono text-inkSoft">{collectionLocations.length}</span> of{' '}
-              <span className="font-mono text-inkSoft">{data.locations.length}</span> locations —
-              filtered to those <span className="font-mono">{collection.uuid}</span> has already deployed.
-              Each becomes <span className="font-mono">deployment_id</span> ={' '}
-              <span className="font-mono">&lt;collection-uuid&gt;:&lt;location-id&gt;</span>.
-            </p>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="font-body text-[12px] text-inkMute">
+                <span className="font-mono text-inkSoft">{collectionLocations.length}</span> of{' '}
+                <span className="font-mono text-inkSoft">{data.locations.length}</span> locations —
+                filtered to those <span className="font-mono">{collection.uuid}</span> has already
+                deployed. Each becomes <span className="font-mono">deployment_id</span> ={' '}
+                <span className="font-mono">&lt;collection-uuid&gt;:&lt;location-id&gt;</span>.
+              </p>
+              <label className="flex items-center gap-1.5 shrink-0 font-body text-[12px] text-inkSoft">
+                Elevation
+                <span className="inline-flex border border-rule">
+                  {(['meters', 'feet'] as const).map((u) => (
+                    <button
+                      key={u}
+                      type="button"
+                      onClick={() => setElevationUnit(u)}
+                      aria-pressed={elevationUnit === u}
+                      className={`px-2 py-0.5 text-[12px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+                        elevationUnit === u ? 'bg-ink text-paper' : 'text-inkSoft hover:bg-panelHover'
+                      }`}
+                    >
+                      {u === 'meters' ? 'm' : 'ft'}
+                    </button>
+                  ))}
+                </span>
+              </label>
+            </div>
           </div>
         )}
       </section>

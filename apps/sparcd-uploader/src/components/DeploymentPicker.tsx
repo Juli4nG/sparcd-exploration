@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Location } from '../lib/locations';
+import {
+  formatLatLng,
+  formatUTM,
+  metersToFeet,
+  type ElevationUnit,
+} from '../lib/coords';
 
 type Props = {
   locations: Location[];
   value: string | null; // selected Location.key
   onChange: (key: string) => void;
+  elevationUnit?: ElevationUnit;
 };
 
 function coords(loc: Location): string {
@@ -16,10 +23,13 @@ function coords(loc: Location): string {
  * id; arrow keys move the highlight, Enter selects, Esc closes. Bespoke to
  * match the Field Notebook chrome rather than pulling in a dropdown library.
  */
-export function DeploymentPicker({ locations, value, onChange }: Props) {
+export function DeploymentPicker({ locations, value, onChange, elevationUnit = 'meters' }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(0);
+  // Detail popover open-state, keyed on `loc.key` — NOT `loc.id`, which repeats
+  // across distinct coordinates (the id-is-not-unique data contract).
+  const [detailKey, setDetailKey] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -42,7 +52,10 @@ export function DeploymentPicker({ locations, value, onChange }: Props) {
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setDetailKey(null);
+      }
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -52,6 +65,7 @@ export function DeploymentPicker({ locations, value, onChange }: Props) {
     onChange(loc.key);
     setQuery('');
     setOpen(false);
+    setDetailKey(null);
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -68,7 +82,34 @@ export function DeploymentPicker({ locations, value, onChange }: Props) {
       if (loc) choose(loc);
     } else if (e.key === 'Escape') {
       setOpen(false);
+      setDetailKey(null);
     }
+  }
+
+  // Coordinates (DD + UTM) and dual-unit elevation, preferred unit emphasized.
+  function LocationDetail({ loc }: { loc: Location }) {
+    return (
+      <dl className="mt-1 space-y-0.5 font-mono text-[11px] text-inkMute">
+        <div className="flex gap-2">
+          <dt className="w-10 shrink-0 text-inkSoft">DD</dt>
+          <dd className="truncate">{formatLatLng(loc.latitude, loc.longitude)}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-10 shrink-0 text-inkSoft">UTM</dt>
+          <dd className="truncate">{formatUTM(loc.latitude, loc.longitude)}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-10 shrink-0 text-inkSoft">Elev</dt>
+          <dd className="truncate">
+            <span className={elevationUnit === 'meters' ? 'text-ink' : ''}>{loc.elevation} m</span>
+            {' · '}
+            <span className={elevationUnit === 'feet' ? 'text-ink' : ''}>
+              {metersToFeet(loc.elevation)} ft
+            </span>
+          </dd>
+        </div>
+      </dl>
+    );
   }
 
   return (
@@ -130,10 +171,27 @@ export function DeploymentPicker({ locations, value, onChange }: Props) {
                   i === highlight ? 'bg-mark' : 'hover:bg-panelHover'
                 }`}
               >
-                <span className="block truncate font-body text-[14px] text-ink">{loc.name}</span>
-                <span className="block truncate font-mono text-[12px] text-inkMute">
-                  {loc.id} · {coords(loc)} · {loc.elevation} m
-                </span>
+                <div className="flex items-start gap-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-body text-[14px] text-ink">{loc.name}</span>
+                    <span className="block truncate font-mono text-[12px] text-inkMute">
+                      {loc.id} · {coords(loc)} · {loc.elevation} m
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDetailKey((k) => (k === loc.key ? null : loc.key));
+                    }}
+                    aria-expanded={detailKey === loc.key}
+                    aria-label={`Details for ${loc.name}`}
+                    className="shrink-0 w-5 h-5 grid place-items-center border border-rule text-inkSoft hover:text-ink hover:border-ink text-[11px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                  >
+                    i
+                  </button>
+                </div>
+                {detailKey === loc.key && <LocationDetail loc={loc} />}
               </li>
             ))}
           </ul>
