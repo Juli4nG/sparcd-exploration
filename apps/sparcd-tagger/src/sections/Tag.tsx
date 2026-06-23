@@ -12,13 +12,14 @@ import { Cheatsheet } from '../components/Cheatsheet';
 import { SyncDialog } from '../components/SyncDialog';
 import { SnapshotsDialog } from '../components/SnapshotsDialog';
 import { TimeShiftModal } from '../components/TimeShiftModal';
+import { BulkTimeShiftModal } from '../components/BulkTimeShiftModal';
 import { PerImageTime } from '../components/PerImageTime';
 import { SpeciesLoupe } from '../components/SpeciesLoupe';
 import { ImageAdjustments } from '../components/ImageAdjustments';
 import { cssFilter, NEUTRAL, type Adjustments } from '../lib/adjustments';
 import { Overview, type PickMods, type ViewKind } from '../components/Overview';
 import { groupBursts, type BurstGrouping } from '../lib/bursts';
-import { offsetActive, formatOffsetDelta } from '../lib/timeshift';
+import { offsetActive, formatOffsetDelta, earliestCorrected } from '../lib/timeshift';
 import { rangeSet, toggleIndex, burstIndexSet } from '../lib/selection';
 import { effectiveOf, type Effective } from '../lib/effective';
 import { sortIndices, type SortField, type SortDir } from '../lib/sortImages';
@@ -29,6 +30,7 @@ import {
   GHOST,
   type AppliedTag,
   type TagTarget,
+  type BulkTimeTarget,
   type UploadCtx,
 } from '../lib/drafts';
 import { useKeyBindings, effectiveKey, normalizeJavaKeyCode } from '../lib/keys';
@@ -68,6 +70,7 @@ export function Tag() {
   const setQuestionableManyFn = useDraftStore((s) => s.setQuestionableMany);
   const setTimeOffsetFn = useDraftStore((s) => s.setTimeOffset);
   const setTimeOverrideFn = useDraftStore((s) => s.setTimeOverride);
+  const applyTimeOffsetToSelectionFn = useDraftStore((s) => s.applyTimeOffsetToSelection);
   const flushSaves = useDraftStore((s) => s.flushSaves);
   const discardUpload = useDraftStore((s) => s.discardUpload);
 
@@ -88,6 +91,12 @@ export function Tag() {
   const [showSync, setShowSync] = useState(false);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showTimeShift, setShowTimeShift] = useState(false);
+  // Snapshot the bulk targets + preview anchor once when the modal opens — both
+  // derive from the SAME corrected baseline, so the before→after preview always
+  // matches what apply persists, and re-renders (spinner clicks) don't recompute.
+  const [bulkTime, setBulkTime] = useState<{ targets: BulkTimeTarget[]; anchor: string } | null>(
+    null,
+  );
   const [zoomSpecies, setZoomSpecies] = useState<Species | null>(null);
   // Synchronous mirror of "a read-only overlay is open", read by the global key
   // handler. A ref (not the async state) so it's already true for any keydown
@@ -100,6 +109,18 @@ export function Tag() {
   const closeLoupe = () => {
     modalOpenRef.current = false;
     setZoomSpecies(null);
+  };
+  // The bulk time-shift modal acts ON the selection, so suppress tagger hotkeys
+  // while it's open (same synchronous-ref guard as the loupe) — nothing should
+  // tag the selected frames behind it.
+  const openBulkTime = () => {
+    const targets = bulkTimeTargets();
+    modalOpenRef.current = true;
+    setBulkTime({ targets, anchor: earliestCorrected(targets) });
+  };
+  const closeBulkTime = () => {
+    modalOpenRef.current = false;
+    setBulkTime(null);
   };
   const [savedAt, setSavedAt] = useState(0);
   const [sortField, setSortField] = useState<SortField>('name');
@@ -269,6 +290,24 @@ export function Tag() {
     if (tag.scientificName) pushRecent(tag.scientificName);
   };
 
+  // Selection-scoped bulk time shift: each target carries its currently-displayed
+  // corrected time so the store can freeze (corrected + delta) into a per-image
+  // override. Frames without a capture time have nothing to correct, so skip them.
+  const bulkTimeTargets = () =>
+    [...selected]
+      .map((i) => list[i])
+      .filter((img) => img && img.baseTimestamp)
+      .map((img) => ({
+        mediaPath: img.key,
+        deploymentId: img.deploymentId,
+        base: { observations: img.baseObservations },
+        currentCorrected: correctedTimestamp(
+          img.baseTimestamp,
+          timeOffset,
+          drafts[img.key]?.timeOverride ?? null,
+        ),
+      }));
+
   // --- Mouse selection gestures (single / Shift-range / Cmd-additive). --------
   const pick = (i: number, mods: PickMods) => {
     if (mods.shift) {
@@ -409,6 +448,19 @@ export function Tag() {
           <span aria-hidden>◷</span>
           {hasUploadShift ? `clock ${formatOffsetDelta(timeOffset)}` : 'Time shift'}
         </button>
+
+        {/* Shift only the selected frames — e.g. one mis-set camera in a mixed
+            upload. Stored as per-image corrections, so it stacks on the offset. */}
+        {selected.size > 0 && (
+          <button
+            onClick={openBulkTime}
+            className="inline-flex items-center gap-1.5 text-[11.5px] font-mono px-2 py-1 border border-rule text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            title={`Shift the ${selected.size} selected frame(s) by a signed offset`}
+          >
+            <span aria-hidden>◷</span>
+            Shift selection
+          </button>
+        )}
 
         {/* Find image by filename — jumps focus to a match (the virtualizer then
             scrolls it into view). Separate from the species filter. */}
@@ -566,6 +618,14 @@ export function Tag() {
           totalFrames={list.length}
           onApply={(o) => setTimeOffsetFn(ctx, o)}
           onClose={() => setShowTimeShift(false)}
+        />
+      )}
+      {bulkTime && (
+        <BulkTimeShiftModal
+          count={bulkTime.targets.length}
+          anchorTimestamp={bulkTime.anchor}
+          onApply={(delta) => applyTimeOffsetToSelectionFn(ctx, bulkTime.targets, delta)}
+          onClose={closeBulkTime}
         />
       )}
       {zoomSpecies && <SpeciesLoupe species={zoomSpecies} onClose={closeLoupe} />}

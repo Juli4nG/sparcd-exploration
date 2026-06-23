@@ -6,6 +6,22 @@
 
 import type { TimeOffsetRecord } from './db';
 
+/** The earliest already-corrected timestamp among the bulk targets — the anchor a
+ *  selection-scoped shift previews against. It MUST be the corrected time (not the
+ *  raw base), because the shift is applied relative to the time each frame shows
+ *  now, so the preview's before→after matches what apply actually persists. ISO
+ *  timestamps sort chronologically, so a lexicographic min is the earliest.
+ *  Returns '' for an empty target set. */
+export function earliestCorrected(targets: { currentCorrected: string }[]): string {
+  let earliest = '';
+  for (const t of targets) {
+    if (t.currentCorrected && (earliest === '' || t.currentCorrected < earliest)) {
+      earliest = t.currentCorrected;
+    }
+  }
+  return earliest;
+}
+
 export const ZERO_OFFSET_RECORD: TimeOffsetRecord = {
   years: 0,
   months: 0,
