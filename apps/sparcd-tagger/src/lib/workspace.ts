@@ -33,6 +33,15 @@ export type TagImage = {
 // never become tiles.
 const IMAGE_EXT = /\.(jpe?g|mp4)$/i;
 
+// A display-mode discriminator over keys that already passed `IMAGE_EXT`. Only
+// `.mp4` actually reaches the UI today (it's the lone video ext `IMAGE_EXT`
+// admits), but we match the other common camera-trap video extensions too so
+// widening the listing filter later doesn't silently render a clip as a broken
+// <img>. Detection is by key/filename extension only — no probing.
+export function isVideoKey(key: string): boolean {
+  return /\.(mp4|avi|mov|m4v)$/i.test(key);
+}
+
 export function buildTagImages(bundle: CanonicalBundle): TagImage[] {
   const obsByMedia = new Map<string, Observation[]>();
   for (const o of parseObservations(bundle.observationsCsv)) {

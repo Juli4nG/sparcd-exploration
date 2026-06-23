@@ -5,7 +5,7 @@ import { useDraftStore } from '../lib/drafts';
 import { effectiveOf, isEditedFromBase, isGhostObs } from '../lib/effective';
 import { isRangeFullySelected } from '../lib/selection';
 import type { Burst, BurstGrouping } from '../lib/bursts';
-import type { TagImage } from '../lib/workspace';
+import { isVideoKey, type TagImage } from '../lib/workspace';
 import type { DraftObservation } from '../lib/db';
 
 /** A one-line label for an image's effective species set: the first species (with
@@ -242,11 +242,21 @@ function ListCell({
       }`}
     >
       <span className="w-12 shrink-0">
-        <Thumb objectKey={img.key} alt={img.fileName} />
+        <Thumb objectKey={img.key} alt={img.fileName} isVideo={isVideoKey(img.key)} />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block text-[12px] font-mono text-inkSoft truncate" title={img.fileName}>
-          {img.fileName}
+        <span className="flex items-center gap-1.5">
+          {isVideoKey(img.key) && (
+            <span className="shrink-0 bg-paperHover border border-rule text-inkSoft font-mono text-[10px] px-1 leading-tight">
+              VIDEO
+            </span>
+          )}
+          <span
+            className="block text-[12px] font-mono text-inkSoft truncate"
+            title={img.fileName}
+          >
+            {img.fileName}
+          </span>
         </span>
         <span className="block text-[12px] truncate">
           {eff.observations.length ? (
@@ -302,8 +312,13 @@ function GridCell({
             : 'border-rule hover:bg-panelHover'
       } focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2`}
     >
-      <span className="block flex-1 min-h-0">
-        <Thumb objectKey={img.key} alt={img.fileName} />
+      <span className="relative block flex-1 min-h-0">
+        <Thumb objectKey={img.key} alt={img.fileName} isVideo={isVideoKey(img.key)} />
+        {isVideoKey(img.key) && (
+          <span className="absolute top-1 left-1 bg-paperHover border border-rule text-inkSoft font-mono text-[10px] px-1 leading-tight">
+            VIDEO
+          </span>
+        )}
       </span>
       <span className="mt-1 flex items-center gap-1">
         {isEditedFromBase(eff) && (

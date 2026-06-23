@@ -28,7 +28,7 @@ import {
 } from '../lib/drafts';
 import { useKeyBindings, effectiveKey, normalizeJavaKeyCode } from '../lib/keys';
 import type { Species } from '../lib/species';
-import type { TagImage } from '../lib/workspace';
+import { isVideoKey, type TagImage } from '../lib/workspace';
 import type { DraftRecord } from '../lib/db';
 
 const GHOST_KEY = 'g';
@@ -567,7 +567,26 @@ function FocusImage({ objectKey, alt }: { objectKey: string; alt: string }) {
   if (isError)
     return <div className="text-[13px] font-mono text-warn">Could not load this image.</div>;
   if (!data) return <div className="text-[13px] font-mono text-inkMute">…</div>;
+  if (isVideoKey(objectKey)) return <FocusVideo src={data} alt={alt} resetKey={objectKey} />;
   return <ZoomableImage src={data} alt={alt} resetKey={objectKey} />;
+}
+
+// Video media plays with native controls. No zoom/pan/Lightbox: the
+// react-zoom-pan-pinch wrapper captures wheel/pointer events and would fight
+// native scrubbing. `key={resetKey}` recreates the element on navigation so the
+// prior clip's playback/seek state never bleeds into the next one.
+function FocusVideo({ src, alt, resetKey }: { src: string; alt: string; resetKey: string }) {
+  return (
+    <video
+      key={resetKey}
+      src={src}
+      aria-label={alt}
+      controls
+      playsInline
+      preload="metadata"
+      className="w-full h-full object-contain"
+    />
+  );
 }
 
 const ZOOM_PROPS = {
@@ -782,6 +801,14 @@ function isTypingTarget(t: EventTarget | null): boolean {
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 }
 
+// A focused <video>/<audio> owns its own keys (Space = play/pause, arrows =
+// seek/volume). Let the browser handle them rather than letting a tagger hotkey
+// fire — otherwise Space steals focus to the filter and letter keys tag the clip.
+function isMediaTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return !!el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO');
+}
+
 /** Move focus to image `i`, clearing selection and re-anchoring range-select. */
 function focusMove(s: HandlerState, i: number): void {
   const clamped = Math.max(0, Math.min(i, s.list.length - 1));
@@ -822,6 +849,10 @@ function handleKey(e: KeyboardEvent, s: HandlerState): void {
     }
     return;
   }
+
+  // A focused video/audio control handles its own keys natively; don't let any
+  // tagger hotkey fire while the user is scrubbing or playing.
+  if (isMediaTarget(e.target)) return;
 
   const typing = isTypingTarget(e.target);
 
