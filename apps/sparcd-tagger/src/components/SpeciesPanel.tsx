@@ -26,6 +26,7 @@ export type SpeciesPanelProps = {
   selectionCount: number; // >0 → applying a species hits the whole selection
   disabled: boolean; // no image focused
   headerSlot?: ReactNode; // the compact applied-species strip, under the filter
+  onZoom?: (species: Species) => void; // open the enlarged reference image
 };
 
 const GHOST_KEY = 'G';
@@ -109,6 +110,7 @@ export function SpeciesPanel(props: SpeciesPanelProps) {
             onApply={() => props.onApply({ scientificName: s.scientificName, commonName: s.commonName, count: 1 })}
             onStartCapture={() => props.onStartCapture(s.scientificName)}
             onClearKey={props.bindingFor(s.scientificName) ? () => props.onClearKey(s.scientificName) : undefined}
+            onZoom={props.onZoom ? () => props.onZoom!(s) : undefined}
           />
         ))}
 
@@ -144,15 +146,35 @@ type RowProps = {
   onApply: () => void;
   onStartCapture?: () => void;
   onClearKey?: () => void;
+  onZoom?: () => void; // present only for animal rows that have a reference image
 };
 
 function Row(p: RowProps) {
   return (
     <div
-      className={`group flex items-center gap-3 px-3 py-2 border-b border-ruleSoft ${
+      className={`group relative flex items-center gap-3 px-3 py-2 border-b border-ruleSoft ${
         p.applied ? 'bg-mark' : 'hover:bg-panelHover'
       }`}
     >
+      {/* Loupe: a sibling of the apply button (never nested — button-in-button is
+          invalid and would fire apply), overlaid on the thumbnail's top-left and
+          revealed on row hover/focus. stopPropagation keeps clicking it from
+          applying the species. */}
+      {p.iconUrl && p.onZoom && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            p.onZoom!();
+          }}
+          className="absolute top-2 left-3 w-4 h-4 grid place-items-center bg-ink/55 text-paper text-[10px] font-mono opacity-0 group-hover:opacity-100 focus:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+          title="Enlarge reference"
+          aria-label={`Enlarge ${p.common} reference image`}
+        >
+          ⊕
+        </button>
+      )}
       <button
         onClick={p.onApply}
         disabled={p.disabled}

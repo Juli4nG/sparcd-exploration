@@ -13,6 +13,7 @@ import { SyncDialog } from '../components/SyncDialog';
 import { SnapshotsDialog } from '../components/SnapshotsDialog';
 import { TimeShiftModal } from '../components/TimeShiftModal';
 import { PerImageTime } from '../components/PerImageTime';
+import { SpeciesLoupe } from '../components/SpeciesLoupe';
 import { ImageAdjustments } from '../components/ImageAdjustments';
 import { cssFilter, NEUTRAL, type Adjustments } from '../lib/adjustments';
 import { Overview, type PickMods, type ViewKind } from '../components/Overview';
@@ -87,6 +88,19 @@ export function Tag() {
   const [showSync, setShowSync] = useState(false);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showTimeShift, setShowTimeShift] = useState(false);
+  const [zoomSpecies, setZoomSpecies] = useState<Species | null>(null);
+  // Synchronous mirror of "a read-only overlay is open", read by the global key
+  // handler. A ref (not the async state) so it's already true for any keydown
+  // that lands between opening the loupe and React committing the state.
+  const modalOpenRef = useRef(false);
+  const openLoupe = (sp: Species) => {
+    modalOpenRef.current = true;
+    setZoomSpecies(sp);
+  };
+  const closeLoupe = () => {
+    modalOpenRef.current = false;
+    setZoomSpecies(null);
+  };
   const [savedAt, setSavedAt] = useState(0);
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
@@ -314,6 +328,7 @@ export function Tag() {
     filter,
     view,
     setView,
+    isModalOpen: () => modalOpenRef.current,
   };
 
   useEffect(() => {
@@ -553,6 +568,7 @@ export function Tag() {
           onClose={() => setShowTimeShift(false)}
         />
       )}
+      {zoomSpecies && <SpeciesLoupe species={zoomSpecies} onClose={closeLoupe} />}
     </div>
   );
 
@@ -561,6 +577,7 @@ export function Tag() {
     return {
       species: speciesList,
       onApply: apply,
+      onZoom: openLoupe,
       filter,
       onFilterChange: setFilter,
       filterRef,
@@ -1028,6 +1045,7 @@ type HandlerState = {
   filter: string;
   view: View;
   setView: (v: View) => void;
+  isModalOpen: () => boolean; // a read-only overlay (e.g. the species loupe) owns the keys
 };
 
 function isTypingTarget(t: EventTarget | null): boolean {
@@ -1061,6 +1079,11 @@ function gotoBurst(s: HandlerState, dir: 1 | -1): void {
 }
 
 function handleKey(e: KeyboardEvent, s: HandlerState): void {
+  // A read-only overlay (the species loupe) owns the keyboard while open — it
+  // closes itself on Escape via its own capture-phase listener; suppress all
+  // tagger hotkeys so nothing is tagged behind the modal.
+  if (s.isModalOpen()) return;
+
   // Cheatsheet modal swallows everything but its own toggle / dismiss.
   if (s.showCheatsheet) {
     if (e.key === '?' || e.key === 'Escape') {
