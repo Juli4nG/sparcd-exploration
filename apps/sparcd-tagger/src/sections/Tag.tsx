@@ -20,6 +20,7 @@ import { groupBursts, type BurstGrouping } from '../lib/bursts';
 import { offsetActive, formatOffsetDelta } from '../lib/timeshift';
 import { rangeSet, toggleIndex, burstIndexSet } from '../lib/selection';
 import { effectiveOf, type Effective } from '../lib/effective';
+import { sortIndices, type SortField, type SortDir } from '../lib/sortImages';
 import {
   useDraftStore,
   dirtyCount,
@@ -35,6 +36,7 @@ import type { DraftRecord } from '../lib/db';
 
 const GHOST_KEY = 'g';
 const RECENT_LIMIT = 12;
+const EMPTY: TagImage[] = []; // stable ref so memos don't churn before data loads
 
 type View = 'overview' | 'focus';
 
@@ -85,10 +87,31 @@ export function Tag() {
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showTimeShift, setShowTimeShift] = useState(false);
   const [savedAt, setSavedAt] = useState(0);
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
   const filterRef = useRef<HTMLInputElement>(null);
 
-  const list = images.data ?? [];
+  // Sort a permutation of the canonical order, then map images through it. Every
+  // downstream consumer (bursts, selection, keyboard nav) re-derives from `list`,
+  // so ordering lives entirely here. Species count is draft-aware (effective), so
+  // re-sorting by species stays live as tags change.
+  const base = images.data ?? EMPTY;
+  const speciesCountOf = (img: TagImage) => effectiveOf(img, drafts[img.key]).observations.length;
+  const order = useMemo(
+    () => sortIndices(base, speciesCountOf, sortField, sortDir),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [base, drafts, sortField, sortDir],
+  );
+  const list = useMemo(() => order.map((i) => base[i]), [base, order]);
   const current = list[focus];
+
+  const handleSort = (field: SortField) => {
+    if (field === sortField) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
 
   // An upload offset shifts every image equally, so it never changes a burst
   // gap — only the band labels. Feed the offset-corrected time so bands read the
@@ -113,12 +136,37 @@ export function Tag() {
     list,
   ]);
 
-  // Reset focus/selection when the upload changes / data arrives.
+  // Reset focus/selection when the upload changes / data arrives. Null the sort
+  // permutation ref so the remap effect below treats the next `order` as a fresh
+  // baseline rather than translating stale positions across a different upload.
+  const prevOrderRef = useRef<number[] | null>(null);
   useEffect(() => {
     setFocus(0);
     setAnchor(0);
     setSelected(new Set());
+    prevOrderRef.current = null;
   }, [uploadPrefix, images.data]);
+
+  // When only the sort order changes (a header click, or a draft edit while
+  // sorting by species), the user's focus/anchor/selection are positions in the
+  // OLD order. Translate them through old-position → canonical-index → new-position
+  // so they stay on the SAME images instead of silently jumping.
+  useEffect(() => {
+    const prev = prevOrderRef.current;
+    prevOrderRef.current = order;
+    if (!prev || prev.length !== order.length || order.length === 0) return;
+    const newPos = new Array<number>(order.length);
+    order.forEach((baseIdx, pos) => {
+      newPos[baseIdx] = pos;
+    });
+    const remap = (oldPos: number) => {
+      const baseIdx = prev[oldPos];
+      return baseIdx == null ? oldPos : newPos[baseIdx] ?? oldPos;
+    };
+    setFocus((f) => remap(f));
+    setAnchor((a) => remap(a));
+    setSelected((sel) => (sel.size ? new Set([...sel].map(remap)) : sel));
+  }, [order]);
 
   // History routes here with `pendingSnapshots` set to jump straight into the
   // recovery dialog for the chosen upload; consume the flag once.
@@ -351,16 +399,21 @@ export function Tag() {
       <div className="flex-1 min-h-0">
         {view === 'overview' ? (
           <div className="h-full grid grid-cols-[1fr_340px] min-h-0">
-            <Overview
-              list={list}
-              grouping={grouping}
-              focus={focus}
-              selected={selected}
-              kind={overviewKind}
-              onPick={pick}
-              onSelectBurst={selectBurst}
-              onDrill={drill}
-            />
+            <div className="flex flex-col min-h-0">
+              <SortBar field={sortField} dir={sortDir} onSort={handleSort} />
+              <div className="flex-1 min-h-0">
+                <Overview
+                  list={list}
+                  grouping={grouping}
+                  focus={focus}
+                  selected={selected}
+                  kind={overviewKind}
+                  onPick={pick}
+                  onSelectBurst={selectBurst}
+                  onDrill={drill}
+                />
+              </div>
+            </div>
             <SpeciesPanel {...speciesPanelProps()} />
           </div>
         ) : (
@@ -537,6 +590,47 @@ function FocusPane({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const SORT_FIELDS: { field: SortField; label: string }[] = [
+  { field: 'name', label: 'Name' },
+  { field: 'type', label: 'Type' },
+  { field: 'date', label: 'Date' },
+  { field: 'species', label: 'Species' },
+];
+
+// A thin toolbar above the Overview. Clicking a field sorts by it; clicking the
+// active field flips direction. Drives both grid and list views off one state.
+function SortBar({
+  field,
+  dir,
+  onSort,
+}: {
+  field: SortField;
+  dir: SortDir;
+  onSort: (f: SortField) => void;
+}) {
+  return (
+    <div className="shrink-0 flex items-center gap-4 px-3 h-8 border-b border-rule bg-panel">
+      <span className="text-[11px] font-[600] tracking-[0.14em] uppercase text-inkMute">Sort</span>
+      {SORT_FIELDS.map((s) => {
+        const active = s.field === field;
+        return (
+          <button
+            key={s.field}
+            onClick={() => onSort(s.field)}
+            aria-pressed={active}
+            className={`text-[11px] font-[600] tracking-[0.14em] uppercase focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+              active ? 'text-ink' : 'text-inkSoft hover:text-ink'
+            }`}
+          >
+            {s.label}
+            {active && <span className="ml-1">{dir === 'asc' ? '▲' : '▼'}</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }
