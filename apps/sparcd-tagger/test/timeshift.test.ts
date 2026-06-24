@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { shiftTimestamp, correctedTimestamp } from '@sparcd/camtrap';
 import {
   ZERO_OFFSET_RECORD,
   offsetActive,
   formatOffsetDelta,
   normalizeTimestampInput,
+  earliestCorrected,
 } from '../src/lib/timeshift';
 
 describe('offsetActive', () => {
@@ -50,5 +52,42 @@ describe('normalizeTimestampInput', () => {
     expect(normalizeTimestampInput('2024-13-01 06:00:00')).toBeNull(); // month 13
     expect(normalizeTimestampInput('2024-01-11 25:00:00')).toBeNull(); // hour 25
     expect(normalizeTimestampInput('2024-01-11')).toBeNull(); // no time
+  });
+});
+
+describe('earliestCorrected', () => {
+  it('returns the smallest non-empty corrected time among the targets', () => {
+    const targets = [
+      { currentCorrected: '2024-01-01T09:00:00' },
+      { currentCorrected: '2024-01-01T08:00:00' },
+      { currentCorrected: '2024-01-01T08:30:00' },
+    ];
+    expect(earliestCorrected(targets)).toBe('2024-01-01T08:00:00');
+  });
+
+  it('returns "" for an empty target set', () => {
+    expect(earliestCorrected([])).toBe('');
+  });
+});
+
+describe('bulk offset preview matches the persisted override', () => {
+  it('anchor (corrected) + delta equals what apply freezes, with offset + override present', () => {
+    const base = '2024-01-01T08:00:00';
+    const uploadOffset = { ...ZERO_OFFSET_RECORD, hours: 1 };
+    const existingOverride = '2024-01-01T10:00:00'; // a prior per-image absolute
+    const delta = { ...ZERO_OFFSET_RECORD, minutes: 15 };
+
+    // The corrected time the UI shows now (override wins over offset) is exactly
+    // the anchor fed to the preview AND the value apply shifts.
+    const currentCorrected = correctedTimestamp(base, uploadOffset, existingOverride);
+    expect(currentCorrected).toBe('2024-01-01T10:00:00');
+    const anchor = earliestCorrected([{ currentCorrected }]);
+
+    const previewAfter = shiftTimestamp(anchor, delta); // what the modal shows
+    const persistedOverride = shiftTimestamp(currentCorrected, delta); // what apply writes
+    expect(previewAfter).toBe(persistedOverride);
+    expect(persistedOverride).toBe('2024-01-01T10:15:00');
+    // Resolution still routes through the same two canonical inputs (override wins).
+    expect(correctedTimestamp(base, uploadOffset, persistedOverride)).toBe('2024-01-01T10:15:00');
   });
 });

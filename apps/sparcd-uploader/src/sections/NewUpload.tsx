@@ -86,9 +86,9 @@ export function NewUpload() {
           </div>
           <FileList />
           <p className="font-body text-[13px] text-inkMute">
-            EXIF, SHA-256, thumbnails, and validation run in Web Workers. Files needing attention
-            (no EXIF timestamp) get manual entry in Assign (P2); duplicates are warnings you can keep
-            or drop with <span className="font-mono">D</span>.
+            EXIF, SHA-256, thumbnails, and validation run in Web Workers. Files with no capture time
+            get manual entry in Assign; duplicates are warnings you can keep or drop with{' '}
+            <span className="font-mono">D</span>.
           </p>
         </div>
       )}

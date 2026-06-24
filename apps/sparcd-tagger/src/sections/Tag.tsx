@@ -12,27 +12,35 @@ import { Cheatsheet } from '../components/Cheatsheet';
 import { SyncDialog } from '../components/SyncDialog';
 import { SnapshotsDialog } from '../components/SnapshotsDialog';
 import { TimeShiftModal } from '../components/TimeShiftModal';
+import { BulkTimeShiftModal } from '../components/BulkTimeShiftModal';
 import { PerImageTime } from '../components/PerImageTime';
+import { SpeciesLoupe } from '../components/SpeciesLoupe';
+import { ImageAdjustments } from '../components/ImageAdjustments';
+import { cssFilter, NEUTRAL, type Adjustments } from '../lib/adjustments';
 import { Overview, type PickMods, type ViewKind } from '../components/Overview';
 import { groupBursts, type BurstGrouping } from '../lib/bursts';
-import { offsetActive, formatOffsetDelta } from '../lib/timeshift';
+import { offsetActive, formatOffsetDelta, earliestCorrected } from '../lib/timeshift';
 import { rangeSet, toggleIndex, burstIndexSet } from '../lib/selection';
 import { effectiveOf, type Effective } from '../lib/effective';
+import { sortIndices, type SortField, type SortDir } from '../lib/sortImages';
+import { findFilenameMatches } from '../lib/imageSearch';
 import {
   useDraftStore,
   dirtyCount,
   GHOST,
   type AppliedTag,
   type TagTarget,
+  type BulkTimeTarget,
   type UploadCtx,
 } from '../lib/drafts';
 import { useKeyBindings, effectiveKey, normalizeJavaKeyCode } from '../lib/keys';
 import type { Species } from '../lib/species';
-import type { TagImage } from '../lib/workspace';
+import { isVideoKey, type TagImage } from '../lib/workspace';
 import type { DraftRecord } from '../lib/db';
 
 const GHOST_KEY = 'g';
 const RECENT_LIMIT = 12;
+const EMPTY: TagImage[] = []; // stable ref so memos don't churn before data loads
 
 type View = 'overview' | 'focus';
 
@@ -62,6 +70,7 @@ export function Tag() {
   const setQuestionableManyFn = useDraftStore((s) => s.setQuestionableMany);
   const setTimeOffsetFn = useDraftStore((s) => s.setTimeOffset);
   const setTimeOverrideFn = useDraftStore((s) => s.setTimeOverride);
+  const applyTimeOffsetToSelectionFn = useDraftStore((s) => s.applyTimeOffsetToSelection);
   const flushSaves = useDraftStore((s) => s.flushSaves);
   const discardUpload = useDraftStore((s) => s.discardUpload);
 
@@ -82,11 +91,89 @@ export function Tag() {
   const [showSync, setShowSync] = useState(false);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showTimeShift, setShowTimeShift] = useState(false);
+  // Snapshot the bulk targets + preview anchor once when the modal opens — both
+  // derive from the SAME corrected baseline, so the before→after preview always
+  // matches what apply persists, and re-renders (spinner clicks) don't recompute.
+  const [bulkTime, setBulkTime] = useState<{ targets: BulkTimeTarget[]; anchor: string } | null>(
+    null,
+  );
+  const [zoomSpecies, setZoomSpecies] = useState<Species | null>(null);
+  // Synchronous mirror of "a read-only overlay is open", read by the global key
+  // handler. A ref (not the async state) so it's already true for any keydown
+  // that lands between opening the loupe and React committing the state.
+  const modalOpenRef = useRef(false);
+  const openLoupe = (sp: Species) => {
+    modalOpenRef.current = true;
+    setZoomSpecies(sp);
+  };
+  const closeLoupe = () => {
+    modalOpenRef.current = false;
+    setZoomSpecies(null);
+  };
+  // The bulk time-shift modal acts ON the selection, so suppress tagger hotkeys
+  // while it's open (same synchronous-ref guard as the loupe) — nothing should
+  // tag the selected frames behind it.
+  const openBulkTime = () => {
+    const targets = bulkTimeTargets();
+    modalOpenRef.current = true;
+    setBulkTime({ targets, anchor: earliestCorrected(targets) });
+  };
+  const closeBulkTime = () => {
+    modalOpenRef.current = false;
+    setBulkTime(null);
+  };
   const [savedAt, setSavedAt] = useState(0);
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
   const filterRef = useRef<HTMLInputElement>(null);
 
-  const list = images.data ?? [];
+  // Sort a permutation of the canonical order, then map images through it. Every
+  // downstream consumer (bursts, selection, keyboard nav) re-derives from `list`,
+  // so ordering lives entirely here. Species count is draft-aware (effective), so
+  // re-sorting by species stays live as tags change.
+  const base = images.data ?? EMPTY;
+  const speciesCountOf = (img: TagImage) => effectiveOf(img, drafts[img.key]).observations.length;
+  const order = useMemo(
+    () => sortIndices(base, speciesCountOf, sortField, sortDir),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [base, drafts, sortField, sortDir],
+  );
+  const list = useMemo(() => order.map((i) => base[i]), [base, order]);
   const current = list[focus];
+
+  const handleSort = (field: SortField) => {
+    if (field === sortField) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  // Find-image-by-name: jump keyboard focus to a filename match. Independent of
+  // the species filter (a separate concern in SpeciesPanel). Jump-only — never
+  // filters `list`, which would renumber the positional burst/selection indices.
+  const [imgQuery, setImgQuery] = useState('');
+  const [matchPos, setMatchPos] = useState(0);
+  const imgSearchRef = useRef<HTMLInputElement>(null);
+  const matches = useMemo(() => findFilenameMatches(list, imgQuery), [list, imgQuery]);
+
+  const jumpToMatch = (pos: number) => {
+    if (!matches.length) return;
+    const wrapped = ((pos % matches.length) + matches.length) % matches.length;
+    setMatchPos(wrapped);
+    const idx = matches[wrapped];
+    setFocus(idx);
+    setAnchor(idx);
+    setSelected(new Set());
+  };
+
+  // Auto-jump to the first match as the query changes (jump-as-you-type).
+  useEffect(() => {
+    if (matches.length) jumpToMatch(0);
+    else setMatchPos(0);
+    // jumpToMatch reads `matches`; depend on the query+matches, not the closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imgQuery, matches]);
 
   // An upload offset shifts every image equally, so it never changes a burst
   // gap — only the band labels. Feed the offset-corrected time so bands read the
@@ -111,12 +198,39 @@ export function Tag() {
     list,
   ]);
 
-  // Reset focus/selection when the upload changes / data arrives.
+  // Reset focus/selection when the upload changes / data arrives. Null the sort
+  // permutation ref so the remap effect below treats the next `order` as a fresh
+  // baseline rather than translating stale positions across a different upload.
+  const prevOrderRef = useRef<number[] | null>(null);
   useEffect(() => {
     setFocus(0);
     setAnchor(0);
     setSelected(new Set());
+    setImgQuery('');
+    setMatchPos(0);
+    prevOrderRef.current = null;
   }, [uploadPrefix, images.data]);
+
+  // When only the sort order changes (a header click, or a draft edit while
+  // sorting by species), the user's focus/anchor/selection are positions in the
+  // OLD order. Translate them through old-position → canonical-index → new-position
+  // so they stay on the SAME images instead of silently jumping.
+  useEffect(() => {
+    const prev = prevOrderRef.current;
+    prevOrderRef.current = order;
+    if (!prev || prev.length !== order.length || order.length === 0) return;
+    const newPos = new Array<number>(order.length);
+    order.forEach((baseIdx, pos) => {
+      newPos[baseIdx] = pos;
+    });
+    const remap = (oldPos: number) => {
+      const baseIdx = prev[oldPos];
+      return baseIdx == null ? oldPos : newPos[baseIdx] ?? oldPos;
+    };
+    setFocus((f) => remap(f));
+    setAnchor((a) => remap(a));
+    setSelected((sel) => (sel.size ? new Set([...sel].map(remap)) : sel));
+  }, [order]);
 
   // History routes here with `pendingSnapshots` set to jump straight into the
   // recovery dialog for the chosen upload; consume the flag once.
@@ -175,6 +289,24 @@ export function Tag() {
     addSpeciesFn(ctx, targets, tag);
     if (tag.scientificName) pushRecent(tag.scientificName);
   };
+
+  // Selection-scoped bulk time shift: each target carries its currently-displayed
+  // corrected time so the store can freeze (corrected + delta) into a per-image
+  // override. Frames without a capture time have nothing to correct, so skip them.
+  const bulkTimeTargets = () =>
+    [...selected]
+      .map((i) => list[i])
+      .filter((img) => img && img.baseTimestamp)
+      .map((img) => ({
+        mediaPath: img.key,
+        deploymentId: img.deploymentId,
+        base: { observations: img.baseObservations },
+        currentCorrected: correctedTimestamp(
+          img.baseTimestamp,
+          timeOffset,
+          drafts[img.key]?.timeOverride ?? null,
+        ),
+      }));
 
   // --- Mouse selection gestures (single / Shift-range / Cmd-additive). --------
   const pick = (i: number, mods: PickMods) => {
@@ -235,6 +367,7 @@ export function Tag() {
     filter,
     view,
     setView,
+    isModalOpen: () => modalOpenRef.current,
   };
 
   useEffect(() => {
@@ -316,6 +449,82 @@ export function Tag() {
           {hasUploadShift ? `clock ${formatOffsetDelta(timeOffset)}` : 'Time shift'}
         </button>
 
+        {/* Shift only the selected frames — e.g. one mis-set camera in a mixed
+            upload. Stored as per-image corrections, so it stacks on the offset. */}
+        {selected.size > 0 && (
+          <button
+            onClick={openBulkTime}
+            className="inline-flex items-center gap-1.5 text-[11.5px] font-mono px-2 py-1 border border-rule text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            title={`Shift the ${selected.size} selected frame(s) by a signed offset`}
+          >
+            <span aria-hidden>◷</span>
+            Shift selection
+          </button>
+        )}
+
+        {/* Find image by filename — jumps focus to a match (the virtualizer then
+            scrolls it into view). Separate from the species filter. */}
+        <div className="inline-flex items-center gap-1 border border-rule px-1.5 py-0.5">
+          <span aria-hidden className="text-[12px] text-inkMute">
+            ⌕
+          </span>
+          <input
+            ref={imgSearchRef}
+            value={imgQuery}
+            onChange={(e) => setImgQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                jumpToMatch(matchPos + (e.shiftKey ? -1 : 1));
+              } else if (e.key === 'Escape') {
+                setImgQuery('');
+                imgSearchRef.current?.blur();
+              }
+            }}
+            placeholder="Find image…"
+            className="w-28 bg-transparent text-[12px] font-mono text-ink placeholder:text-inkMute focus:outline-none"
+            title="Find image by filename (Enter / Shift+Enter to cycle, / to focus)"
+          />
+          {imgQuery.trim() && (
+            <>
+              <span
+                className={`text-[11px] font-mono ${matches.length ? 'text-accent' : 'text-warn'}`}
+              >
+                {matches.length ? matchPos + 1 : 0}/{matches.length}
+              </span>
+              <button
+                onClick={() => jumpToMatch(matchPos - 1)}
+                disabled={!matches.length}
+                className="text-[12px] text-inkSoft hover:text-ink disabled:opacity-40 px-0.5"
+                title="Previous match"
+                aria-label="Previous match"
+              >
+                ‹
+              </button>
+              <button
+                onClick={() => jumpToMatch(matchPos + 1)}
+                disabled={!matches.length}
+                className="text-[12px] text-inkSoft hover:text-ink disabled:opacity-40 px-0.5"
+                title="Next match"
+                aria-label="Next match"
+              >
+                ›
+              </button>
+              <button
+                onClick={() => {
+                  setImgQuery('');
+                  imgSearchRef.current?.focus();
+                }}
+                className="text-[12px] text-inkMute hover:text-ink px-0.5"
+                title="Clear"
+                aria-label="Clear image search"
+              >
+                ✕
+              </button>
+            </>
+          )}
+        </div>
+
         <div className="ml-auto flex items-center gap-3">
           {savedAt > 0 && <span className="text-[12px] font-mono text-accent">saved ✓</span>}
           {nDirty > 0 && (
@@ -349,16 +558,21 @@ export function Tag() {
       <div className="flex-1 min-h-0">
         {view === 'overview' ? (
           <div className="h-full grid grid-cols-[1fr_340px] min-h-0">
-            <Overview
-              list={list}
-              grouping={grouping}
-              focus={focus}
-              selected={selected}
-              kind={overviewKind}
-              onPick={pick}
-              onSelectBurst={selectBurst}
-              onDrill={drill}
-            />
+            <div className="flex flex-col min-h-0">
+              <SortBar field={sortField} dir={sortDir} onSort={handleSort} />
+              <div className="flex-1 min-h-0">
+                <Overview
+                  list={list}
+                  grouping={grouping}
+                  focus={focus}
+                  selected={selected}
+                  kind={overviewKind}
+                  onPick={pick}
+                  onSelectBurst={selectBurst}
+                  onDrill={drill}
+                />
+              </div>
+            </div>
             <SpeciesPanel {...speciesPanelProps()} />
           </div>
         ) : (
@@ -406,6 +620,15 @@ export function Tag() {
           onClose={() => setShowTimeShift(false)}
         />
       )}
+      {bulkTime && (
+        <BulkTimeShiftModal
+          count={bulkTime.targets.length}
+          anchorTimestamp={bulkTime.anchor}
+          onApply={(delta) => applyTimeOffsetToSelectionFn(ctx, bulkTime.targets, delta)}
+          onClose={closeBulkTime}
+        />
+      )}
+      {zoomSpecies && <SpeciesLoupe species={zoomSpecies} onClose={closeLoupe} />}
     </div>
   );
 
@@ -414,6 +637,7 @@ export function Tag() {
     return {
       species: speciesList,
       onApply: apply,
+      onZoom: openLoupe,
       filter,
       onFilterChange: setFilter,
       filterRef,
@@ -477,10 +701,26 @@ function FocusPane({
   onClearTime: () => void;
   onDetag: () => void;
 }) {
+  // View-only display adjustments live here so they reset to neutral when the
+  // user leaves Focus (this component unmounts) and stay sticky while paging
+  // through images within a Focus session — the night-frame burst workflow.
+  const [adjustments, setAdjustments] = useState<Adjustments>(NEUTRAL);
+  const filter = useMemo(() => cssFilter(adjustments), [adjustments]);
+  const showAdjust = !!current && !isVideoKey(current.key);
+
   return (
     <div className="flex flex-col min-h-0 bg-paper">
       <div className="relative flex-1 min-h-0 grid place-items-center p-4 overflow-hidden">
-        {current && <FocusImage objectKey={current.key} alt={current.fileName} />}
+        {current && <FocusImage objectKey={current.key} alt={current.fileName} filter={filter} />}
+        {showAdjust && (
+          <div className="absolute bottom-4 left-4 z-10">
+            <ImageAdjustments
+              value={adjustments}
+              onChange={setAdjustments}
+              onReset={() => setAdjustments(NEUTRAL)}
+            />
+          </div>
+        )}
       </div>
       {current && eff && (
         <div className="shrink-0 border-t border-rule bg-panel px-5 py-3 flex items-center gap-5 flex-wrap">
@@ -523,6 +763,47 @@ function FocusPane({
   );
 }
 
+const SORT_FIELDS: { field: SortField; label: string }[] = [
+  { field: 'name', label: 'Name' },
+  { field: 'type', label: 'Type' },
+  { field: 'date', label: 'Date' },
+  { field: 'species', label: 'Species' },
+];
+
+// A thin toolbar above the Overview. Clicking a field sorts by it; clicking the
+// active field flips direction. Drives both grid and list views off one state.
+function SortBar({
+  field,
+  dir,
+  onSort,
+}: {
+  field: SortField;
+  dir: SortDir;
+  onSort: (f: SortField) => void;
+}) {
+  return (
+    <div className="shrink-0 flex items-center gap-4 px-3 h-8 border-b border-rule bg-panel">
+      <span className="text-[11px] font-[600] tracking-[0.14em] uppercase text-inkMute">Sort</span>
+      {SORT_FIELDS.map((s) => {
+        const active = s.field === field;
+        return (
+          <button
+            key={s.field}
+            onClick={() => onSort(s.field)}
+            aria-pressed={active}
+            className={`text-[11px] font-[600] tracking-[0.14em] uppercase focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+              active ? 'text-ink' : 'text-inkSoft hover:text-ink'
+            }`}
+          >
+            {s.label}
+            {active && <span className="ml-1">{dir === 'asc' ? '▲' : '▼'}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Segmented({
   value,
   onChange,
@@ -550,7 +831,15 @@ function Segmented({
   );
 }
 
-function FocusImage({ objectKey, alt }: { objectKey: string; alt: string }) {
+function FocusImage({
+  objectKey,
+  alt,
+  filter,
+}: {
+  objectKey: string;
+  alt: string;
+  filter?: string;
+}) {
   const cfg = useStore((s) => s.s3Config);
   const connectionId = useStore((s) => s.connectionId);
   const collectionKey = useStore((s) => s.selectedCollectionKey);
@@ -567,7 +856,26 @@ function FocusImage({ objectKey, alt }: { objectKey: string; alt: string }) {
   if (isError)
     return <div className="text-[13px] font-mono text-warn">Could not load this image.</div>;
   if (!data) return <div className="text-[13px] font-mono text-inkMute">…</div>;
-  return <ZoomableImage src={data} alt={alt} resetKey={objectKey} />;
+  if (isVideoKey(objectKey)) return <FocusVideo src={data} alt={alt} resetKey={objectKey} />;
+  return <ZoomableImage src={data} alt={alt} resetKey={objectKey} filter={filter} />;
+}
+
+// Video media plays with native controls. No zoom/pan/Lightbox: the
+// react-zoom-pan-pinch wrapper captures wheel/pointer events and would fight
+// native scrubbing. `key={resetKey}` recreates the element on navigation so the
+// prior clip's playback/seek state never bleeds into the next one.
+function FocusVideo({ src, alt, resetKey }: { src: string; alt: string; resetKey: string }) {
+  return (
+    <video
+      key={resetKey}
+      src={src}
+      aria-label={alt}
+      controls
+      playsInline
+      preload="metadata"
+      className="w-full h-full object-contain"
+    />
+  );
 }
 
 const ZOOM_PROPS = {
@@ -581,7 +889,17 @@ const ZOOM_PROPS = {
   panning: { velocityDisabled: true },
 };
 
-function ZoomableImage({ src, alt, resetKey }: { src: string; alt: string; resetKey: string }) {
+function ZoomableImage({
+  src,
+  alt,
+  resetKey,
+  filter,
+}: {
+  src: string;
+  alt: string;
+  resetKey: string;
+  filter?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   return (
@@ -602,6 +920,7 @@ function ZoomableImage({ src, alt, resetKey }: { src: string; alt: string; reset
                 src={src}
                 alt={alt}
                 draggable={false}
+                style={filter ? { filter } : undefined}
                 className="w-full h-full object-contain select-none"
               />
             </TransformComponent>
@@ -614,12 +933,22 @@ function ZoomableImage({ src, alt, resetKey }: { src: string; alt: string; reset
           </>
         )}
       </TransformWrapper>
-      {expanded && <Lightbox src={src} alt={alt} onClose={() => setExpanded(false)} />}
+      {expanded && <Lightbox src={src} alt={alt} filter={filter} onClose={() => setExpanded(false)} />}
     </>
   );
 }
 
-function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+function Lightbox({
+  src,
+  alt,
+  filter,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  filter?: string;
+  onClose: () => void;
+}) {
   const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -653,6 +982,7 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
                   src={src}
                   alt={alt}
                   draggable={false}
+                  style={filter ? { filter } : undefined}
                   className="w-full h-full object-contain select-none"
                 />
               </TransformComponent>
@@ -775,11 +1105,20 @@ type HandlerState = {
   filter: string;
   view: View;
   setView: (v: View) => void;
+  isModalOpen: () => boolean; // a read-only overlay (e.g. the species loupe) owns the keys
 };
 
 function isTypingTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+}
+
+// A focused <video>/<audio> owns its own keys (Space = play/pause, arrows =
+// seek/volume). Let the browser handle them rather than letting a tagger hotkey
+// fire — otherwise Space steals focus to the filter and letter keys tag the clip.
+function isMediaTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return !!el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO');
 }
 
 /** Move focus to image `i`, clearing selection and re-anchoring range-select. */
@@ -800,6 +1139,11 @@ function gotoBurst(s: HandlerState, dir: 1 | -1): void {
 }
 
 function handleKey(e: KeyboardEvent, s: HandlerState): void {
+  // A read-only overlay (the species loupe) owns the keyboard while open — it
+  // closes itself on Escape via its own capture-phase listener; suppress all
+  // tagger hotkeys so nothing is tagged behind the modal.
+  if (s.isModalOpen()) return;
+
   // Cheatsheet modal swallows everything but its own toggle / dismiss.
   if (s.showCheatsheet) {
     if (e.key === '?' || e.key === 'Escape') {
@@ -823,22 +1167,33 @@ function handleKey(e: KeyboardEvent, s: HandlerState): void {
     return;
   }
 
+  // A focused video/audio control handles its own keys natively; don't let any
+  // tagger hotkey fire while the user is scrubbing or playing.
+  if (isMediaTarget(e.target)) return;
+
   const typing = isTypingTarget(e.target);
 
-  // Escape blurs the filter. Enter applies the first filter match to the targets.
+  // Any focused text input suppresses the tagger hotkeys. The Escape/Enter
+  // species-filter behavior is scoped to the species filter input ONLY — other
+  // inputs (e.g. the find-image-by-name box) own their own keys, so Enter there
+  // never applies a species tag.
   if (typing) {
-    if (e.key === 'Escape') s.filterRef.current?.blur();
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const q = s.filter.trim().toLowerCase();
-      const match =
-        q &&
-        s.speciesList.find(
-          (sp) =>
-            sp.commonName.toLowerCase().includes(q) || sp.scientificName.toLowerCase().includes(q),
-        );
-      if (match) s.apply({ scientificName: match.scientificName, commonName: match.commonName, count: 1 });
-      s.filterRef.current?.blur();
+    if (e.target === s.filterRef.current) {
+      if (e.key === 'Escape') s.filterRef.current?.blur();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const q = s.filter.trim().toLowerCase();
+        const match =
+          q &&
+          s.speciesList.find(
+            (sp) =>
+              sp.commonName.toLowerCase().includes(q) ||
+              sp.scientificName.toLowerCase().includes(q),
+          );
+        if (match)
+          s.apply({ scientificName: match.scientificName, commonName: match.commonName, count: 1 });
+        s.filterRef.current?.blur();
+      }
     }
     return;
   }

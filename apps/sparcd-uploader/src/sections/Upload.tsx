@@ -5,6 +5,7 @@ import { useCollections } from '../lib/useCollections';
 import { sanitizeUploaderUser } from '../lib/normalize';
 import { formatBytes } from '../lib/scanFiles';
 import { runUpload, type UploadRun, type UploadSnapshot } from '../lib/upload';
+import { captureTimeComplete } from '../lib/validation';
 import { Note, RunMonitor } from '../components/RunMonitor';
 
 const sectionLabel = 'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
@@ -46,7 +47,7 @@ export function Upload() {
   const ready = useMemo(() => files.filter((f) => f.processState === 'ready' && f.sha256), [files]);
 
   const start = () => {
-    if (!s3Config || !location || !collection || !slug) return;
+    if (!s3Config || !location || !collection || !slug || !captureTimeComplete(files)) return;
     const run = runUpload(
       {
         config: s3Config,
@@ -82,6 +83,23 @@ export function Upload() {
           className="border border-ink text-ink px-3.5 py-1.5 text-[14px] font-body hover:bg-paperHover"
         >
           Back
+        </button>
+      </div>
+    );
+  }
+
+  if (!captureTimeComplete(files)) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-4">
+        <Note
+          tone="warn"
+          message="One or more files still have no capture time. Go back to Assign to set them."
+        />
+        <button
+          onClick={() => setStep('assign')}
+          className="border border-ink text-ink px-3.5 py-1.5 text-[14px] font-body hover:bg-paperHover"
+        >
+          Back to Assign
         </button>
       </div>
     );

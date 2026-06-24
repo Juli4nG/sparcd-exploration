@@ -7,7 +7,9 @@ import type { FileAccessMode } from './lib/db';
 import { validateBatch, type FileValidation } from './lib/validation';
 import { clearClientCache } from './lib/s3';
 import { localTimeZone, type NaiveDateTime } from './lib/exifTime';
+import type { ElevationUnit } from './lib/coords';
 
+export type { ElevationUnit };
 export type Section = 'new' | 'history' | 'settings';
 export type WizardStep = 'drop' | 'inspect' | 'assign' | 'upload';
 export type Theme = 'light' | 'dark';
@@ -18,6 +20,7 @@ export type FileEntry = ScannedFile & {
   processState: ProcessState;
   sha256?: string;
   exifNaive?: NaiveDateTime; // naive wall-clock components, no zone
+  manualNaive?: NaiveDateTime; // user-entered wall-clock for files with no EXIF/container time
   exifCamera?: string;
   gps?: { lat: number; lon: number };
   width?: number;
@@ -32,6 +35,7 @@ type UploaderState = {
   connectionId: number; // increments on connect/disconnect to scope client-side caches
   section: Section;
   theme: Theme;
+  elevationUnit: ElevationUnit; // display pref for location elevation (persisted)
   step: WizardStep;
   files: FileEntry[];
   validations: Record<string, FileValidation>;
@@ -54,6 +58,7 @@ type UploaderState = {
   disconnect: () => void;
   setSection: (section: Section) => void;
   toggleTheme: () => void;
+  setElevationUnit: (unit: ElevationUnit) => void;
   setStep: (step: WizardStep) => void;
   setScanning: (scanning: boolean) => void;
   setProcessing: (processing: boolean) => void;
@@ -62,6 +67,7 @@ type UploaderState = {
   applyResult: (result: ProcessResponse) => void;
   setThumbnail: (id: string, thumbnail: Blob) => void;
   removeFile: (id: string) => void;
+  setManualNaive: (id: string, naive: NaiveDateTime | null) => void;
   resetBatch: () => void;
   setUploaderUser: (value: string) => void;
   setSelectedLocationKey: (key: string | null) => void;
@@ -87,6 +93,7 @@ export const useStore = create<UploaderState>()(
       connectionId: 0,
       section: 'new',
       theme: 'light',
+      elevationUnit: 'meters',
       step: 'drop',
       files: [],
       validations: {},
@@ -131,6 +138,7 @@ export const useStore = create<UploaderState>()(
       },
       setSection: (section) => set({ section }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),
+      setElevationUnit: (elevationUnit) => set({ elevationUnit }),
       setStep: (step) => set({ step }),
       setScanning: (scanning) => set({ scanning }),
       setProcessing: (processing) => set({ processing }),
@@ -193,6 +201,17 @@ export const useStore = create<UploaderState>()(
           return { files, validations: validateBatch(files) };
         }),
 
+      // Manual capture time for a file with no EXIF/container time. Stored as raw
+      // naive components (like exifNaive) so it's interpreted in the upload zone
+      // at bundle build; null clears it and re-surfaces the file as unset.
+      setManualNaive: (id, naive) =>
+        set((s) => {
+          const files = s.files.map((f) =>
+            f.id === id ? { ...f, manualNaive: naive ?? undefined } : f,
+          );
+          return { files, validations: validateBatch(files) };
+        }),
+
       resetBatch: () =>
         set((s) => ({
           files: [],
@@ -228,7 +247,7 @@ export const useStore = create<UploaderState>()(
     {
       name: 'sparcd-uploader-session',
       storage: createJSONStorage(() => sessionStorage),
-      partialize: (s) => ({ s3Config: s.s3Config, theme: s.theme }),
+      partialize: (s) => ({ s3Config: s.s3Config, theme: s.theme, elevationUnit: s.elevationUnit }),
     },
   ),
 );

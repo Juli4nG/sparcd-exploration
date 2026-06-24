@@ -39,10 +39,12 @@ export function validateBatch(files: FileEntry[]): Record<string, FileValidation
     }
 
     // A capture time is required. EXIF (images) or MP4 container metadata
-    // (videos) supplies it; absence — including a video with no container time —
-    // routes the file to "needs attention" / manual entry.
-    if (f.processState === 'ready' && !f.exifNaive) {
-      issues.push({ severity: 'error', message: 'No EXIF timestamp — needs manual entry' });
+    // (videos) supplies it; absence is a soft warning here so inspect doesn't
+    // hard-block — the file is resolved by entering a time in Assign (a manual
+    // time satisfies the check). The hard gate is `captureTimeComplete`, applied
+    // at the Assign→upload boundary.
+    if (f.processState === 'ready' && !f.exifNaive && !f.manualNaive) {
+      issues.push({ severity: 'warning', message: 'No capture time — set one in Assign' });
     }
 
     if (f.size > SOFT_SIZE_LIMIT) {
@@ -61,6 +63,14 @@ export function validateBatch(files: FileEntry[]): Record<string, FileValidation
     out[f.id] = { severity, issues };
   }
   return out;
+}
+
+// The hard capture-time gate: every ready file must carry a capture time, from
+// EXIF/container metadata OR a manual Assign entry. Consumed at the Assign
+// Continue gate and as the Upload publish backstop — NOT in the inspect summary,
+// so inspect stays unblocked while times are still being entered.
+export function captureTimeComplete(files: FileEntry[]): boolean {
+  return files.every((f) => f.processState !== 'ready' || !!f.exifNaive || !!f.manualNaive);
 }
 
 export type BatchSummary = {

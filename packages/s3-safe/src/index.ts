@@ -529,7 +529,16 @@ export type CollectionRef = {
   uuid: string;
   name: string | null;
   organization: string | null;
+  contact: string | null;
+  description: string | null;
 };
+
+// collection.json is untrusted JSON from any producer. A field that's present
+// but not a string must not throw (the broad catch below would silently drop the
+// whole collection from discovery) — coerce non-strings and empties to null.
+function cleanStr(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
 
 export async function listCollections(client: SafeS3Client): Promise<CollectionRef[]> {
   const buckets = await client.listBuckets();
@@ -542,16 +551,15 @@ export async function listCollections(client: SafeS3Client): Promise<CollectionR
       const uuid = bucket.slice(COLLECTION_BUCKET_PREFIX.length).toLowerCase();
       try {
         const bytes = await client.getObject(bucket, `Collections/${uuid}/collection.json`);
-        const doc = JSON.parse(new TextDecoder().decode(bytes)) as {
-          nameProperty?: string;
-          organizationProperty?: string;
-        };
+        const doc = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
         found.push({
           key: `${bucket}::${uuid}`,
           bucket,
           uuid,
-          name: doc.nameProperty?.trim() || null,
-          organization: doc.organizationProperty?.trim() || null,
+          name: cleanStr(doc.nameProperty),
+          organization: cleanStr(doc.organizationProperty),
+          contact: cleanStr(doc.contactInfoProperty),
+          description: cleanStr(doc.descriptionProperty),
         });
       } catch {
         // No marker, or unreadable / CORS-blocked. Keep probing.

@@ -105,14 +105,17 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
 
   const deployment = locationToDeployment(location, collectionUuid);
 
-  // Resolve each file's capture time in the chosen zone: naive EXIF components →
-  // DST-correct UTC naive wall-clock, the exact media.csv col-4 byte shape. A
-  // file with no naive time (no EXIF, or a video without container metadata)
-  // gets an empty timestamp — validation routes it to manual entry.
+  // Resolve each file's capture time in the chosen zone: naive components →
+  // DST-correct UTC naive wall-clock, the exact media.csv col-4 byte shape. EXIF
+  // (or video container) metadata wins; a manual Assign entry fills the gap for a
+  // file that has none, so a real camera time is never clobbered. Publish is
+  // gated on every file having one, so col 4 is never empty for a published batch.
   const mimeFor = (f: FileEntry): string =>
     f.mimeType ?? (f.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg');
-  const captureFor = (f: FileEntry): string =>
-    f.exifNaive ? naiveInZoneToUtcNaive(f.exifNaive, timeZone) : '';
+  const captureFor = (f: FileEntry): string => {
+    const src = f.exifNaive ?? f.manualNaive;
+    return src ? naiveInZoneToUtcNaive(src, timeZone) : '';
+  };
 
   const media: Media[] = ready.map((f) => {
     const objectName = names.get(f.id)!;

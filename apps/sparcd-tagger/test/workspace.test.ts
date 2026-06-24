@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { serializeCsvRows, serializeObservations, MEDIA_COLUMN_COUNT } from '@sparcd/camtrap';
-import { buildTagImages } from '../src/lib/workspace';
+import { buildTagImages, isVideoKey } from '../src/lib/workspace';
 
 // Real canonical media (Java / sparcd-web) carries the capture time in col 4,
 // unlike the uploader's initial empty-timestamp write — build raw rows so the
@@ -90,5 +90,19 @@ describe('buildTagImages', () => {
       'Canis latrans',
     ]);
     expect(multi[0].baseObservations[0].count).toBe(3);
+  });
+});
+
+describe('isVideoKey', () => {
+  it('matches video extensions case-insensitively', () => {
+    for (const k of ['a/b/IMG.mp4', 'clip.MP4', 'x.avi', 'y.mov', 'z.m4v']) {
+      expect(isVideoKey(k)).toBe(true);
+    }
+  });
+
+  it('rejects image and non-media keys', () => {
+    for (const k of ['p.jpg', 'q.jpeg', 'r.csv', 'noext', 'mp4.jpg']) {
+      expect(isVideoKey(k)).toBe(false);
+    }
   });
 });

@@ -8,6 +8,7 @@
 // editing one image never re-renders the whole strip.
 
 import { create } from 'zustand';
+import { shiftTimestamp } from '@sparcd/camtrap';
 import {
   db,
   draftId,
@@ -42,6 +43,13 @@ export type BaseSeed = { observations: DraftObservation[] };
  *  partial edit (e.g. toggling questionable, adding one species) never drops the
  *  image's existing species — a draft is the image's full intended state. */
 export type TagTarget = { mediaPath: string; deploymentId: string; base?: BaseSeed };
+
+/** A target for a selection-scoped bulk time offset. `currentCorrected` is the
+ *  image's currently-displayed corrected timestamp (upload offset + any existing
+ *  per-image override already applied); the bulk delta is added on top of it and
+ *  frozen into the image's absolute `timeOverride`, so the whole correction stays
+ *  expressed through the canonical override slot — no new resolution input. */
+export type BulkTimeTarget = TagTarget & { currentCorrected: string };
 
 /** The species a UI action applies to an image (add-only; one species). */
 export type AppliedTag = {
@@ -139,6 +147,16 @@ type DraftState = {
   // write per target, so applying to a 2,000-image burst is a single re-render
   // of the changed rows, not 2,000 sequential store mutations.
   setQuestionableMany: (ctx: UploadCtx, targets: TagTarget[], value: boolean) => void;
+
+  /** Apply a signed time delta to a selection by freezing, per image, the new
+   *  absolute corrected timestamp into its per-image `timeOverride`. The bulk op
+   *  is just a fast way to set many overrides at once; resolution and sync stay
+   *  byte-identical to a hand-edited per-image override. */
+  applyTimeOffsetToSelection: (
+    ctx: UploadCtx,
+    targets: BulkTimeTarget[],
+    delta: TimeOffsetRecord,
+  ) => void;
 
   /** Flush every pending debounced Dexie write now (manual Cmd/Ctrl+S confirm). */
   flushSaves: () => Promise<void>;
@@ -274,6 +292,21 @@ export const useDraftStore = create<DraftState>((set, get) => {
 
     setQuestionableMany: (ctx, targets, value) =>
       mutateMany(ctx, targets, { questionable: value }),
+
+    applyTimeOffsetToSelection: (ctx, targets, delta) => {
+      // Precompute the new absolute override per image (delta on top of the
+      // already-corrected time), keyed by media path so the shared mutateMany
+      // reducer — which only sees `prev` — can look each one up.
+      const overrideByPath: Record<string, string> = {};
+      for (const t of targets) {
+        overrideByPath[t.mediaPath] = shiftTimestamp(t.currentCorrected, delta);
+      }
+      mutateMany(
+        ctx,
+        targets.map(({ mediaPath, deploymentId, base }) => ({ mediaPath, deploymentId, base })),
+        (prev) => ({ timeOverride: overrideByPath[prev.mediaPath] }),
+      );
+    },
 
     flushSaves: async () => {
       const records: DraftRecord[] = [];

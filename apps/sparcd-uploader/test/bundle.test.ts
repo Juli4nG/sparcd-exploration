@@ -49,7 +49,11 @@ const naive = (over: Partial<NaiveDateTime> = {}): NaiveDateTime => ({
 // A ready FileEntry backed by a real File so `crypto.subtle` has bytes to hash.
 function ready(
   relPath: string,
-  opts: { exifNaive?: NaiveDateTime; mediaKind?: FileEntry['mediaKind'] } = {},
+  opts: {
+    exifNaive?: NaiveDateTime;
+    manualNaive?: NaiveDateTime;
+    mediaKind?: FileEntry['mediaKind'];
+  } = {},
 ): FileEntry {
   const mediaKind = opts.mediaKind ?? 'image';
   const mimeType = mediaKind === 'video' ? 'video/mp4' : 'image/jpeg';
@@ -66,6 +70,7 @@ function ready(
     processState: 'ready',
     sha256: `sha-${relPath}`,
     exifNaive: 'exifNaive' in opts ? opts.exifNaive : naive(),
+    manualNaive: opts.manualNaive,
   };
 }
 
@@ -121,6 +126,22 @@ describe('uploader bundle is valid v016 Camtrap data', () => {
   it('a file with no capture time leaves col 4 empty', async () => {
     const b = await build([ready('a/CLIP.MP4', { mediaKind: 'video', exifNaive: undefined })]);
     expect(parseMedia(b.mediaCsv)[0].timestamp).toBe('');
+  });
+
+  it('a manual capture time fills col 4 (DST-corrected) when EXIF is absent', async () => {
+    const b = await build(
+      [ready('a/IMG001.JPG', { exifNaive: undefined, manualNaive: naive({ hour: 8 }) })],
+      'America/Phoenix',
+    );
+    expect(parseMedia(b.mediaCsv)[0].timestamp).toBe('2024-01-10T15:00:00');
+  });
+
+  it('prefers EXIF over a stray manual time so a real camera time is never clobbered', async () => {
+    const b = await build(
+      [ready('a/IMG001.JPG', { exifNaive: naive({ hour: 8 }), manualNaive: naive({ hour: 20 }) })],
+      'America/Phoenix',
+    );
+    expect(parseMedia(b.mediaCsv)[0].timestamp).toBe('2024-01-10T15:00:00');
   });
 
   it('media rows carry the full object key as media_id and round-trip', async () => {

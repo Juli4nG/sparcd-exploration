@@ -3,9 +3,12 @@ import { useStore } from '../store';
 import { useLocations } from '../lib/useLocations';
 import { useCollections, useCollectionDeployments } from '../lib/useCollections';
 import { DeploymentPicker } from '../components/DeploymentPicker';
+import { CollectionPicker } from '../components/CollectionPicker';
 import { MetadataPreview } from '../components/MetadataPreview';
+import { CaptureTimeEditor } from '../components/CaptureTimeEditor';
 import { sanitizeUploaderUser } from '../lib/normalize';
 import { supportedTimeZones } from '../lib/exifTime';
+import { captureTimeComplete } from '../lib/validation';
 
 const sectionLabel =
   'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
@@ -36,6 +39,8 @@ export function Assign() {
   const setSelectedLocationKey = useStore((s) => s.setSelectedLocationKey);
   const selectedBucket = useStore((s) => s.selectedBucket);
   const setSelectedBucket = useStore((s) => s.setSelectedBucket);
+  const elevationUnit = useStore((s) => s.elevationUnit);
+  const setElevationUnit = useStore((s) => s.setElevationUnit);
   const files = useStore((s) => s.files);
 
   const { data, isLoading, isError, error } = useLocations(s3Config, connectionId);
@@ -73,7 +78,11 @@ export function Assign() {
   }, [collectionLocations, deployments.data, selectedLocationKey, setSelectedLocationKey]);
 
   const location = collectionLocations.find((l) => l.key === selectedLocationKey) ?? null;
-  const canContinue = !!selectedLocationKey && !!slug && !!collection;
+  const needsCaptureTime = files.some(
+    (f) => f.processState === 'ready' && !f.exifNaive,
+  );
+  const captureComplete = captureTimeComplete(files);
+  const canContinue = !!selectedLocationKey && !!slug && !!collection && captureComplete;
 
   // The chosen zone is always offered even if it isn't in the platform's list.
   const timeZones = useMemo(() => {
@@ -101,18 +110,11 @@ export function Assign() {
               />
             ) : (
               <>
-                <select
-                  value={selectedBucket ?? ''}
-                  onChange={(e) => setSelectedBucket(e.target.value || null)}
-                  className="w-full border border-rule bg-paper px-3 py-2 font-body text-[14px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
-                >
-                  {collections.data.map((c) => (
-                    <option key={c.key} value={c.key}>
-                      {c.name ?? '(unnamed)'}
-                      {c.organization ? ` · ${c.organization}` : ''} — {c.bucket}
-                    </option>
-                  ))}
-                </select>
+                <CollectionPicker
+                  collections={collections.data}
+                  value={selectedBucket}
+                  onChange={(key) => setSelectedBucket(key)}
+                />
                 <p className="font-body text-[12px] text-inkMute">
                   {collection?.name ? (
                     <>
@@ -162,15 +164,36 @@ export function Assign() {
                 locations={collectionLocations}
                 value={selectedLocationKey}
                 onChange={setSelectedLocationKey}
+                elevationUnit={elevationUnit}
               />
             )}
-            <p className="font-body text-[12px] text-inkMute">
-              <span className="font-mono text-inkSoft">{collectionLocations.length}</span> of{' '}
-              <span className="font-mono text-inkSoft">{data.locations.length}</span> locations —
-              filtered to those <span className="font-mono">{collection.uuid}</span> has already deployed.
-              Each becomes <span className="font-mono">deployment_id</span> ={' '}
-              <span className="font-mono">&lt;collection-uuid&gt;:&lt;location-id&gt;</span>.
-            </p>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="font-body text-[12px] text-inkMute">
+                <span className="font-mono text-inkSoft">{collectionLocations.length}</span> of{' '}
+                <span className="font-mono text-inkSoft">{data.locations.length}</span> locations —
+                filtered to those <span className="font-mono">{collection.uuid}</span> has already
+                deployed. Each becomes <span className="font-mono">deployment_id</span> ={' '}
+                <span className="font-mono">&lt;collection-uuid&gt;:&lt;location-id&gt;</span>.
+              </p>
+              <label className="flex items-center gap-1.5 shrink-0 font-body text-[12px] text-inkSoft">
+                Elevation
+                <span className="inline-flex border border-rule">
+                  {(['meters', 'feet'] as const).map((u) => (
+                    <button
+                      key={u}
+                      type="button"
+                      onClick={() => setElevationUnit(u)}
+                      aria-pressed={elevationUnit === u}
+                      className={`px-2 py-0.5 text-[12px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+                        elevationUnit === u ? 'bg-ink text-paper' : 'text-inkSoft hover:bg-panelHover'
+                      }`}
+                    >
+                      {u === 'meters' ? 'm' : 'ft'}
+                    </button>
+                  ))}
+                </span>
+              </label>
+            </div>
           </div>
         )}
       </section>
@@ -213,6 +236,13 @@ export function Assign() {
           zone when they differ.
         </p>
       </section>
+
+      {needsCaptureTime && (
+        <section>
+          <h2 className={sectionLabel}>Capture time</h2>
+          <CaptureTimeEditor files={files} />
+        </section>
+      )}
 
       <section>
         <h2 className={sectionLabel}>Description</h2>
@@ -265,7 +295,9 @@ export function Assign() {
                 ? 'Select a deployment location first'
                 : !collection
                   ? 'Select a target collection first'
-                  : 'Set an uploader identity first'
+                  : !slug
+                    ? 'Set an uploader identity first'
+                    : 'Set a capture time for every file missing one'
           }
           className={`bg-ink text-paper border border-ink px-3.5 py-1.5 text-[14px] font-body font-[600] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
             canContinue ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'

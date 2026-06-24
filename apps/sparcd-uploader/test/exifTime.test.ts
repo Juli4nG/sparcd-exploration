@@ -13,6 +13,8 @@ import {
   naiveInZoneToUtcNaive,
   formatNaive,
   localTimeZone,
+  naiveToInputValue,
+  inputValueToNaive,
   type NaiveDateTime,
 } from '../src/lib/exifTime';
 
@@ -141,5 +143,38 @@ describe('helpers', () => {
     const tz = localTimeZone();
     expect(typeof tz).toBe('string');
     expect(tz.length).toBeGreaterThan(0);
+  });
+});
+
+describe('datetime-local <-> naive (manual capture-time entry)', () => {
+  it('round-trips a naive value through the input string', () => {
+    const n = at({ month: 3, day: 9, hour: 7, minute: 5, second: 1 });
+    expect(naiveToInputValue(n)).toBe('2024-03-09T07:05:01');
+    expect(inputValueToNaive(naiveToInputValue(n))).toEqual(n);
+  });
+
+  it('defaults missing seconds to 0 (browsers may omit at step=1)', () => {
+    expect(inputValueToNaive('2024-03-09T07:05')).toEqual(at({ month: 3, day: 9, hour: 7, minute: 5 }));
+  });
+
+  it('returns null for empty or malformed input', () => {
+    expect(inputValueToNaive('')).toBeNull();
+    expect(inputValueToNaive('not a date')).toBeNull();
+    expect(inputValueToNaive('2024-13-09T07:05:00')).toBeNull(); // month 13
+    expect(inputValueToNaive('2024-03-09')).toBeNull(); // no time
+  });
+
+  it('rejects calendar-impossible dates instead of silently normalizing them', () => {
+    expect(inputValueToNaive('2024-02-31T08:00:00')).toBeNull(); // Feb 31
+    expect(inputValueToNaive('2024-04-31T08:00:00')).toBeNull(); // Apr has 30
+    expect(inputValueToNaive('2023-02-29T08:00:00')).toBeNull(); // not a leap year
+    expect(inputValueToNaive('2024-00-09T08:00:00')).toBeNull(); // month 0
+    expect(inputValueToNaive('2024-03-00T08:00:00')).toBeNull(); // day 0
+  });
+
+  it('accepts a real leap day', () => {
+    expect(inputValueToNaive('2024-02-29T08:00:00')).toEqual(
+      at({ month: 2, day: 29, hour: 8 }),
+    );
   });
 });

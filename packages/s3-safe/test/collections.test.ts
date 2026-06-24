@@ -42,6 +42,8 @@ describe('listCollections', () => {
         'sparcd-ZED/Collections/zed/collection.json': {
           nameProperty: 'Zebra',
           organizationProperty: 'Org Z',
+          contactInfoProperty: 'a@b.edu',
+          descriptionProperty: 'desc Z',
         },
         'sparcd-ALF/Collections/alf/collection.json': { nameProperty: 'Alpha' },
         'sparcd-NOPE/Collections/nope/collection.json': new Error('AccessDenied'),
@@ -59,8 +61,33 @@ describe('listCollections', () => {
       uuid: 'alf', // lowercased from the bucket suffix
       name: 'Alpha',
       organization: null, // absent organizationProperty → null
+      contact: null,
+      description: null,
     });
     expect(result[1].organization).toBe('Org Z');
+    expect(result[1].contact).toBe('a@b.edu');
+    expect(result[1].description).toBe('desc Z');
+  });
+
+  it('keeps a collection whose optional metadata fields are not strings', async () => {
+    // A producer bug / schema drift (number, object) must not throw and drop the
+    // whole collection from discovery — the field just coerces to null.
+    const client = fakeClient(['sparcd-ABC'], {
+      'sparcd-ABC/Collections/abc/collection.json': {
+        nameProperty: 'Gamma',
+        organizationProperty: 42,
+        contactInfoProperty: { email: 'x@y.z' },
+        descriptionProperty: ['weird'],
+      },
+    });
+    const result = await listCollections(client);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      name: 'Gamma',
+      organization: null,
+      contact: null,
+      description: null,
+    });
   });
 });
 

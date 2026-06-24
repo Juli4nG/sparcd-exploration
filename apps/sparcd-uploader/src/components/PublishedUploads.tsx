@@ -24,6 +24,7 @@ import {
 } from '../lib/publishedEdit';
 import { locationToDeployment, type Location } from '../lib/locations';
 import { javaEditStamp } from '@sparcd/camtrap';
+import { formatUploadHeader } from '../lib/uploadDisplay';
 import { DeploymentPicker } from './DeploymentPicker';
 import { Note } from './RunMonitor';
 
@@ -66,10 +67,15 @@ function UploadCard({
   const cfg = useStore((s) => s.s3Config);
   const user = useStore((s) => s.uploaderUser);
   const dryRun = useStore((s) => s.dryRun);
+  const elevationUnit = useStore((s) => s.elevationUnit);
 
+  // UploadMeta.json is an unvalidated JSON cast (older/foreign files may drift),
+  // so default the fields the display reads.
+  const edits = Array.isArray(upload.meta.editComments) ? upload.meta.editComments : [];
   const [mode, setMode] = useState<'none' | 'description' | 'deployment'>('none');
-  const [description, setDescription] = useState(upload.meta.description);
+  const [description, setDescription] = useState(upload.meta.description ?? '');
   const [locationKey, setLocationKey] = useState<string | null>(null);
+  const [showEdits, setShowEdits] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: 'mute' | 'warn'; message: string } | null>(null);
 
@@ -157,12 +163,20 @@ function UploadCard({
 
   return (
     <li className="border border-ruleSoft bg-panel px-4 py-3 space-y-2">
-      <div className="min-w-0">
-        <p className="font-mono text-[13px] text-ink truncate" title={upload.prefix}>
-          {upload.stamp}
+      <div className="min-w-0 space-y-0.5">
+        <p className="font-display text-[14px] text-ink truncate" title={formatUploadHeader(upload.meta)}>
+          {formatUploadHeader(upload.meta)}
+        </p>
+        <p className="font-body text-[12px] text-inkSoft">
+          <span className="font-mono text-ink">{upload.meta.imagesWithSpecies ?? 0}</span>/
+          <span className="font-mono text-ink">{upload.meta.imageCount ?? 0}</span> images tagged with
+          species.
         </p>
         <p className="font-body text-[12px] text-inkSoft truncate" title={upload.meta.description}>
           {upload.meta.description || <span className="italic text-inkMute">no description</span>}
+        </p>
+        <p className="font-mono text-[11px] text-inkMute truncate" title={upload.prefix}>
+          {upload.stamp}
         </p>
         {upload.deploymentId && (
           <p className="font-mono text-[11px] text-inkMute truncate" title={upload.deploymentId}>
@@ -170,6 +184,27 @@ function UploadCard({
           </p>
         )}
       </div>
+
+      {edits.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowEdits((v) => !v)}
+            className="font-body text-[12px] text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            aria-expanded={showEdits}
+          >
+            {showEdits ? '▾' : '▸'} {edits.length} edit{edits.length === 1 ? '' : 's'}
+          </button>
+          {showEdits && (
+            <ul className="mt-1 font-mono text-[11px] text-inkSoft border-l border-ruleSoft pl-2 space-y-0.5 max-h-32 overflow-auto">
+              {edits.map((c, i) => (
+                <li key={i} className="truncate" title={c}>
+                  {c}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {mode === 'none' && (
         <div className="flex items-center gap-2 pt-1">
@@ -224,7 +259,12 @@ function UploadCard({
 
       {mode === 'deployment' && (
         <div className="space-y-2 pt-1">
-          <DeploymentPicker locations={locations} value={locationKey} onChange={setLocationKey} />
+          <DeploymentPicker
+            locations={locations}
+            value={locationKey}
+            onChange={setLocationKey}
+            elevationUnit={elevationUnit}
+          />
           <div className="flex items-center gap-2">
             <button
               disabled={busy || !locationKey}
@@ -254,6 +294,7 @@ export function PublishedUploads() {
   const connectionId = useStore((s) => s.connectionId);
 
   const [collectionKey, setCollectionKey] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const { data: collections } = useCollections(cfg, connectionId);
   const collection = useMemo(
     () => collections?.find((c) => c.key === collectionKey) ?? null,
@@ -262,6 +303,18 @@ export function PublishedUploads() {
   const { data: uploads, isLoading, refetch } = usePublishedUploads(cfg, connectionId, collection);
   const { data: locationsData } = useLocations(cfg, connectionId);
   const locations = locationsData?.locations ?? [];
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !uploads) return uploads ?? [];
+    return uploads.filter(
+      (u) =>
+        u.stamp.toLowerCase().includes(q) ||
+        (u.meta.uploadUser ?? '').toLowerCase().includes(q) ||
+        (u.meta.description ?? '').toLowerCase().includes(q) ||
+        (u.deploymentId ?? '').toLowerCase().includes(q),
+    );
+  }, [uploads, query]);
 
   return (
     <div className="space-y-4">
@@ -287,13 +340,26 @@ export function PublishedUploads() {
         ))}
       </select>
 
+      {collection && uploads && uploads.length > 0 && (
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search uploads by uploader, description, stamp, or deployment…"
+          className="w-full border border-rule bg-paper px-2.5 py-1.5 font-body text-[14px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
+        />
+      )}
+
       {collection && isLoading && <p className="font-body text-[13px] text-inkSoft">Loading uploads…</p>}
       {collection && uploads && uploads.length === 0 && (
         <Note message="No published uploads in this collection." />
       )}
-      {collection && uploads && uploads.length > 0 && (
+      {collection && uploads && uploads.length > 0 && filtered.length === 0 && (
+        <Note message="No uploads match your search." />
+      )}
+      {collection && uploads && uploads.length > 0 && filtered.length > 0 && (
         <ul className="space-y-3">
-          {uploads.map((u) => (
+          {filtered.map((u) => (
             <UploadCard
               key={u.prefix}
               collection={collection}

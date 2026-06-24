@@ -473,10 +473,15 @@ uploaded image under `Collections/<uuid>/Uploads/<stamp>_<slug>/<relpath>`
 verified **v016 11-column** layout, every field quoted, LF-terminated — because
 the existing Python readers parse no-header CSVs by fixed position. The full key
 is repeated in the `media_id` / `sequence_id` / `file_path` positions (cols
-0/2/5), matching the canonical writer; the **timestamp column (4) is left empty**
-on initial upload exactly as SPARC'd leaves it (per-image timestamps enter via
-the tagger). Blob content hashes live in the `files` manifest inside
-`UploadComplete.json` (below), not in a `media.csv` column.
+0/2/5), matching the canonical writer. The **uploader is the writer-of-record for
+capture time**: timestamp column (4) carries the DST-corrected naive wall-clock
+(interpreted in the upload timezone), sourced from EXIF / video-container
+metadata or — for files that have neither — a manual entry in the Assign step.
+Publish is gated so col 4 is never empty for a published batch. (This is the
+contract enforced by `packages/camtrap/test/contracts.test.ts` and
+`serializeMedia`; it supersedes earlier drafts that left col 4 empty.) Blob
+content hashes live in the `files` manifest inside `UploadComplete.json` (below),
+not in a `media.csv` column.
 `file_name` (col 6) is the local filename, `deployment_id` matches the single
 row in `deployments.csv`, and `file_media_type` (col 7) is `image/jpeg`.
 
