@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { S3Config } from '@sparcd/types';
+import {
+  loadSharedConnection,
+  saveSharedConnection,
+  clearSharedConnection,
+  subscribeSharedConnection,
+} from '@sparcd/auth-ui';
 import { clearClientCache } from './lib/s3';
 
 export type Section = 'browse' | 'tag' | 'history' | 'settings';
@@ -54,14 +60,18 @@ type TaggerState = {
 };
 
 export const useStore = create<TaggerState>()(
-  // Persist only the connection + cheap UI prefs, in sessionStorage: the login
-  // survives an HMR/Cmd-R reload within the tab (the daily annoyance) but is
-  // dropped when the tab closes, so a fresh tab starts at the connect gate and
-  // the S3 secret key never lands on disk. Transient state (selection, sync,
-  // pendingSnapshots) is intentionally excluded — see `partialize`.
+  // The S3 connection (secret included) lives in one shared localStorage key,
+  // owned by @sparcd/auth-ui's session module — see `loadSharedConnection`. This
+  // is a deliberate full-persistence posture: log in once in any SPARC'd tool and
+  // every tool (across tabs and tab-close) is logged in; disconnect anywhere
+  // clears it everywhere. This store hydrates s3Config from that shared key on
+  // start and mirrors connect/disconnect back into it. Zustand's own persist here
+  // covers only cheap UI prefs (theme); s3Config is intentionally NOT in
+  // `partialize` because the shared module owns it. Transient state (selection,
+  // sync, pendingSnapshots) is excluded too.
   persist(
     (set) => ({
-      s3Config: null,
+      s3Config: loadSharedConnection(),
       connectionId: 0,
       section: 'browse',
       theme: 'light',
@@ -76,6 +86,7 @@ export const useStore = create<TaggerState>()(
 
       connect: (config) => {
         clearClientCache();
+        saveSharedConnection(config);
         set((s) => ({
           s3Config: config,
           connectionId: s.connectionId + 1,
@@ -85,6 +96,7 @@ export const useStore = create<TaggerState>()(
       },
       disconnect: () => {
         clearClientCache();
+        clearSharedConnection();
         set((s) => ({
           s3Config: null,
           connectionId: s.connectionId + 1,
@@ -122,7 +134,26 @@ export const useStore = create<TaggerState>()(
     {
       name: 'sparcd-tagger-session',
       storage: createJSONStorage(() => sessionStorage),
-      partialize: (s) => ({ s3Config: s.s3Config, theme: s.theme }),
+      partialize: (s) => ({ theme: s.theme }),
     },
   ),
 );
+
+// React to login/logout in OTHER tabs: the shared session module fires this on
+// cross-tab `storage` events. Mirror the new connection into this store and bump
+// connectionId so client-side caches scoped to a connection are invalidated.
+subscribeSharedConnection((cfg) => {
+  clearClientCache();
+  useStore.setState((s) => ({
+    s3Config: cfg,
+    connectionId: s.connectionId + 1,
+    ...(cfg
+      ? {}
+      : {
+          section: 'browse' as const,
+          selectedCollectionKey: null,
+          selectedUploadPrefix: null,
+          taggerUser: '',
+        }),
+  }));
+});

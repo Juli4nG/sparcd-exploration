@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { BrandSwitcher, ConnectionChip } from '@sparcd/auth-ui';
 import { useStore, type Section } from '../store';
 import { StatePill, type UploadState } from './StatePill';
 
@@ -13,15 +14,14 @@ export function Chrome({ uploadState, children }: { uploadState: UploadState; ch
   const setSection = useStore((s) => s.setSection);
   const theme = useStore((s) => s.theme);
   const toggleTheme = useStore((s) => s.toggleTheme);
+  const uploaderUser = useStore((s) => s.uploaderUser);
+  const disconnect = useStore((s) => s.disconnect);
 
   return (
     <div className="min-h-screen flex flex-col bg-paper">
       <header className="h-14 shrink-0 bg-panel border-b border-rule flex items-stretch px-4">
-        <div className="flex items-center gap-2.5 pr-6">
-          <img src={`${import.meta.env.BASE_URL}sparcd.png`} alt="SPARC'd" className="h-7 w-auto" />
-          <span className="font-display text-[22px] font-[600] text-ink leading-none whitespace-nowrap">
-            SPARC'd <span className="text-inkMute">·</span> Uploader
-          </span>
+        <div className="flex items-center pr-6">
+          <BrandSwitcher toolName="Uploader" />
         </div>
 
         <nav className="flex items-stretch" aria-label="Sections">
@@ -45,6 +45,7 @@ export function Chrome({ uploadState, children }: { uploadState: UploadState; ch
 
         <div className="ml-auto flex items-center gap-3">
           <StatePill state={uploadState} />
+          <ConnectionChip identity={uploaderUser || undefined} onDisconnect={disconnect} />
           <button
             onClick={toggleTheme}
             className="w-8 h-8 grid place-items-center border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
