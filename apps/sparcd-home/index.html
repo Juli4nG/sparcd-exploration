@@ -3,19 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SPARC'd · Field Tools</title>
+    <title>SPARC'd · Tools</title>
     <meta
       name="description"
-      content="A small set of focused tools that work alongside SPARC'd — explore, upload, and tag camera-trap collections."
+      content="A small set of focused tools that work alongside SPARC'd."
     />
-    <link rel="icon" href="favicon.ico" sizes="48x48" />
-    <meta property="og:title" content="SPARC'd · Field Tools" />
+    <link rel="icon" type="image/png" sizes="any" href="sparcd.png" />
+    <link rel="alternate icon" href="favicon.ico" />
+    <meta property="og:title" content="SPARC'd · Tools" />
     <meta
       property="og:description"
-      content="Focused tools alongside SPARC'd — Explorer, Uploader, Tagger."
+      content="A small set of focused tools that work alongside SPARC'd."
     />
     <meta property="og:image" content="sparcd.png" />
     <meta property="og:type" content="website" />
+    <script>
+      // Apply a saved theme before paint to avoid a flash. With no saved
+      // choice the attribute is absent and the prefers-color-scheme media
+      // query decides.
+      try {
+        var t = localStorage.getItem('sparcd-home-theme');
+        if (t === 'light' || t === 'dark')
+          document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -23,7 +34,7 @@
       rel="stylesheet"
     />
     <style>
-      /* ── Field Notebook v2 — light (cream paper) ───────────────────── */
+      /* light theme (cream paper) — shares the tagger/uploader tokens */
       :root {
         --paper: #f4ecd8;
         --paperHover: #efe6cc;
@@ -42,9 +53,27 @@
         --grain: 0.04;
       }
 
-      /* ── Field Notebook v2 — walnut dark ───────────────────────────── */
+      /* walnut dark — applied by the explicit toggle, and below as the
+         system-preference default when the user hasn't chosen. */
+      :root[data-theme='dark'] {
+        --paper: #211c15;
+        --paperHover: #2a241b;
+        --panel: #2a241b;
+        --panelHover: #332c20;
+        --ink: #f0e8d6;
+        --inkSoft: #c9bfa6;
+        --inkMute: #9a907a;
+        --rule: #6b6047;
+        --ruleSoft: #3d3528;
+        --accent: #7da7d9;
+        --accentSoft: #26303d;
+        --warn: #d98a5a;
+        --ok: #8fbf7f;
+        --mark: #5a4d2e;
+        --grain: 0.06;
+      }
       @media (prefers-color-scheme: dark) {
-        :root {
+        :root:not([data-theme='light']) {
           --paper: #211c15;
           --paperHover: #2a241b;
           --panel: #2a241b;
@@ -85,9 +114,9 @@
         overflow-x: hidden;
       }
 
-      /* Atmosphere: faint ruled-notebook horizontal lines + a left margin
-         rule, plus a paper-grain wash. Sits behind everything, never
-         intercepts pointer events. */
+      /* Faint horizontal rule lines for paper texture, fading at the top and
+         bottom. Token-driven so it follows the theme. Sits behind everything
+         and never intercepts pointer events. */
       body::before {
         content: '';
         position: fixed;
@@ -108,6 +137,8 @@
         mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 88%, transparent);
       }
 
+      /* A faint paper-grain wash for depth. Sits behind everything and never
+         intercepts pointer events. */
       body::after {
         content: '';
         position: fixed;
@@ -118,8 +149,11 @@
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
         mix-blend-mode: multiply;
       }
+      :root[data-theme='dark'] body::after {
+        mix-blend-mode: screen;
+      }
       @media (prefers-color-scheme: dark) {
-        body::after {
+        :root:not([data-theme='light']) body::after {
           mix-blend-mode: screen;
         }
       }
@@ -177,36 +211,34 @@
         font-style: italic;
       }
 
-      .edition {
+      .theme-toggle {
         margin-left: auto;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.66rem;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: var(--inkMute);
-        text-align: right;
-        line-height: 1.5;
         flex-shrink: 0;
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        font-size: 1rem;
+        line-height: 1;
+        color: var(--inkSoft);
+        background: transparent;
+        border: 1px solid var(--rule);
+        cursor: pointer;
+        transition:
+          color 0.16s ease,
+          border-color 0.16s ease,
+          background-color 0.16s ease;
       }
-      @media (max-width: 460px) {
-        .edition {
-          display: none;
-        }
+      .theme-toggle:hover {
+        color: var(--ink);
+        border-color: var(--accent);
+        background-color: var(--panel);
       }
 
       /* ── Intro ─────────────────────────────────────────────────────── */
       .intro {
         margin: clamp(1.4rem, 4vw, 2.4rem) 0 clamp(1.6rem, 4vw, 2.6rem);
         max-width: 46ch;
-      }
-
-      .intro .kicker {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.7rem;
-        letter-spacing: 0.18em;
-        text-transform: uppercase;
-        color: var(--accent);
-        margin: 0 0 0.7rem;
       }
 
       .intro p {
@@ -246,24 +278,6 @@
           transform 0.18s ease,
           background-color 0.18s ease,
           border-color 0.18s ease;
-      }
-
-      /* punched-tab index marker, like a field-notebook divider */
-      .card .tab {
-        position: absolute;
-        top: -1px;
-        right: clamp(0.9rem, 2.5vw, 1.2rem);
-        padding: 0.18rem 0.5rem 0.22rem;
-        background-color: var(--accent);
-        color: var(--paper);
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.62rem;
-        letter-spacing: 0.12em;
-      }
-      @media (prefers-color-scheme: dark) {
-        .card .tab {
-          color: var(--paper);
-        }
       }
 
       .card .num {
@@ -461,41 +475,44 @@
       <header class="masthead reveal d1">
         <img src="sparcd.png" alt="" />
         <span class="wordmark"
-          >SPARC'd <span class="dot">·</span> <span class="sub">Field Tools</span></span
+          >SPARC'd <span class="dot">·</span> <span class="sub">Tools</span></span
         >
-        <span class="edition">Field Notebook<br />Ed. ’26</span>
+        <button
+          type="button"
+          id="theme-toggle"
+          class="theme-toggle"
+          aria-label="Switch to dark theme"
+        >
+          ☾
+        </button>
       </header>
 
       <section class="intro reveal d2">
-        <p class="kicker">Camera-trap field station</p>
         <p>
-          A small set of <em>focused tools</em> that work alongside SPARC'd — read the
-          collection, add what's missing, and keep the record clean.
+          A small set of <em>focused tools</em> that work alongside SPARC'd —
+          browse a collection, add new uploads, and tag observations.
         </p>
       </section>
 
       <nav class="deck" aria-label="Tools">
         <a class="card reveal" href="explorer/">
-          <span class="tab">01</span>
           <span class="num">Read</span>
           <h2>Explorer</h2>
-          <p>Map, thumbnails, and tags for a collection — browse what the cameras saw.</p>
+          <p>Browse a collection on a map, with thumbnails and tags.</p>
           <span class="go"><span>Open</span><span class="arrow" aria-hidden="true">→</span></span>
         </a>
 
         <a class="card reveal" href="uploader/">
-          <span class="tab">02</span>
           <span class="num">Add</span>
           <h2>Uploader</h2>
-          <p>Stage deployments and media, then publish a tidy upload to the collection.</p>
+          <p>Stage and publish new uploads to a collection.</p>
           <span class="go"><span>Open</span><span class="arrow" aria-hidden="true">→</span></span>
         </a>
 
         <a class="card reveal" href="tagger/">
-          <span class="tab">03</span>
           <span class="num">Refine</span>
           <h2>Tagger</h2>
-          <p>Work through frames and set species, counts, and notes on each observation.</p>
+          <p>Tag observations with species, counts, and notes.</p>
           <span class="go"><span>Open</span><span class="arrow" aria-hidden="true">→</span></span>
         </a>
       </nav>
@@ -507,8 +524,9 @@
       </div>
 
       <footer class="colophon reveal d7">
-        Static launcher · same-origin session shared across tools ·
-        <a href="https://github.com/CulverLab/sparcd-web">SPARC'd</a> is the system of record.
+        Open source ·
+        <a href="https://github.com/Juli4nG/sparcd-exploration">view on GitHub</a> ·
+        <a href="https://www.wildcatresearch.arizona.edu/">Wildcat Research</a>
       </footer>
     </main>
 
@@ -598,6 +616,47 @@
         });
 
         render();
+      })();
+    </script>
+
+    <script>
+      (function () {
+        var KEY = 'sparcd-home-theme';
+        var root = document.documentElement;
+        var btn = document.getElementById('theme-toggle');
+        var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+        function effective() {
+          var t = root.getAttribute('data-theme');
+          if (t === 'light' || t === 'dark') return t;
+          return mq && mq.matches ? 'dark' : 'light';
+        }
+
+        function sync() {
+          var dark = effective() === 'dark';
+          btn.textContent = dark ? '☀' : '☾';
+          var label = dark ? 'Switch to light theme' : 'Switch to dark theme';
+          btn.setAttribute('aria-label', label);
+          btn.title = label;
+        }
+
+        btn.addEventListener('click', function () {
+          var next = effective() === 'dark' ? 'light' : 'dark';
+          root.setAttribute('data-theme', next);
+          try {
+            localStorage.setItem(KEY, next);
+          } catch (e) {}
+          sync();
+        });
+
+        // Follow the OS theme live while the user hasn't made an explicit choice.
+        if (mq) {
+          mq.addEventListener('change', function () {
+            if (!root.getAttribute('data-theme')) sync();
+          });
+        }
+
+        sync();
       })();
     </script>
   </body>
