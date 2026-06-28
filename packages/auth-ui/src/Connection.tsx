@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { detectBackendDefaults, type S3Config } from '@sparcd/types';
+import { BrandSwitcher } from './BrandSwitcher';
 
 export type ConnectionProps = {
   /** Shown in the chrome, e.g. "Uploader" → "SPARC'd · Uploader". */
@@ -61,11 +62,8 @@ export function Connection({ toolName, initialConfig, onConnect }: ConnectionPro
         className="w-full max-w-[440px] bg-panel border border-rule p-8"
         aria-label={`Connect to SPARC'd · ${toolName}`}
       >
-        <div className="flex items-center gap-2.5 mb-1">
-          <img src={`${import.meta.env.BASE_URL}sparcd.png`} alt="SPARC'd" className="h-7 w-auto" />
-          <span className="font-display text-[22px] font-[600] text-ink leading-none">
-            SPARC'd <span className="text-inkMute">·</span> {toolName}
-          </span>
+        <div className="-ml-1.5 mb-1">
+          <BrandSwitcher toolName={toolName} />
         </div>
         <p className="font-body text-[14px] text-inkSoft mb-6">
           Connect to an S3-compatible endpoint to begin.

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "apps/sparcd-home/**"
       - "apps/sparcd-explorer/**"
       - "apps/sparcd-uploader/**"
       - "apps/sparcd-tagger/**"
@@ -74,8 +75,13 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf _site
-          mkdir -p _site/uploader _site/tagger
-          cp -r apps/sparcd-explorer/dist/. _site/
+          mkdir -p _site/explorer _site/uploader _site/tagger
+          # Static landing page at the family root.
+          cp apps/sparcd-home/index.html _site/index.html
+          cp apps/sparcd-home/sparcd.png _site/sparcd.png
+          cp apps/sparcd-home/favicon.ico _site/favicon.ico
+          # Explorer WASM bundle moves under /explorer/ (was site root).
+          cp -r apps/sparcd-explorer/dist/. _site/explorer/
           cp -r apps/sparcd-uploader/dist/. _site/uploader/
           cp -r apps/sparcd-tagger/dist/. _site/tagger/
 

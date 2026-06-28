@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { BrandSwitcher, ConnectionChip } from '@sparcd/auth-ui';
 import { useStore, type Section } from '../store';
 import { useDraftStore, dirtyCount } from '../lib/drafts';
 import { StatePill } from './StatePill';
@@ -19,6 +20,8 @@ export function Chrome({ children }: { children: ReactNode }) {
   const toggleTheme = useStore((s) => s.toggleTheme);
   const syncState = useStore((s) => s.syncState);
   const hasUpload = useStore((s) => !!s.selectedUploadPrefix);
+  const taggerUser = useStore((s) => s.taggerUser);
+  const disconnect = useStore((s) => s.disconnect);
   // Local-only in P1: surface unsaved edits so the pill is honest before the P4
   // write path exists. `syncState` stays the source of truth once sync ships.
   const hasDirty = useDraftStore((s) => dirtyCount(s.drafts) > 0);
@@ -27,11 +30,8 @@ export function Chrome({ children }: { children: ReactNode }) {
   return (
     <div className="h-screen flex flex-col bg-paper">
       <header className="h-14 shrink-0 bg-panel border-b border-rule flex items-stretch px-4">
-        <div className="flex items-center gap-2.5 pr-6">
-          <img src={`${import.meta.env.BASE_URL}sparcd.png`} alt="SPARC'd" className="h-7 w-auto" />
-          <span className="font-display text-[22px] font-[600] text-ink leading-none whitespace-nowrap">
-            SPARC'd <span className="text-inkMute">·</span> Tagger
-          </span>
+        <div className="flex items-center pr-6">
+          <BrandSwitcher toolName="Tagger" />
         </div>
 
         <nav className="flex items-stretch" aria-label="Sections">
@@ -58,6 +58,7 @@ export function Chrome({ children }: { children: ReactNode }) {
 
         <div className="ml-auto flex items-center gap-3">
           <StatePill state={displayState} />
+          <ConnectionChip identity={taggerUser || undefined} onDisconnect={disconnect} />
           <button
             onClick={toggleTheme}
             className="w-8 h-8 grid place-items-center border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
