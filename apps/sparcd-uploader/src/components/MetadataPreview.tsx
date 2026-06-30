@@ -109,7 +109,7 @@ export function MetadataPreview({
           <button
             key={t.key}
             onClick={() => setActive(t.key)}
-            className={`px-3 py-2 font-mono text-[12px] border-r border-ruleSoft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2 ${
+            className={`min-h-[44px] sm:min-h-0 px-3 py-2.5 sm:py-2 font-mono text-[12px] border-r border-ruleSoft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent -outline-offset-2 ${
               active === t.key
                 ? 'bg-paper text-ink font-[600]'
                 : 'text-inkSoft hover:bg-paperHover'
@@ -128,7 +128,7 @@ export function MetadataPreview({
             later by sparcd-tagger.
           </p>
         ) : (
-          <pre className="font-mono text-[11.5px] leading-[1.5] text-ink overflow-auto max-h-[320px] whitespace-pre-wrap break-all">
+          <pre className="font-mono text-[11.5px] leading-[1.5] text-ink overflow-auto max-h-none md:max-h-[320px] overscroll-contain whitespace-pre-wrap break-all">
             {content}
           </pre>
         )}

@@ -204,7 +204,7 @@ function BurstBand({
       </span>
       <button
         onClick={onSelect}
-        className="ml-auto text-[11px] font-mono text-inkMute hover:text-accent underline decoration-dotted focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+        className="ml-auto text-[11px] font-mono text-inkMute hover:text-accent underline decoration-dotted focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent [@media(hover:none)]:inline-flex [@media(hover:none)]:items-center [@media(hover:none)]:justify-center [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:px-3 [@media(hover:none)]:no-underline [@media(hover:none)]:border [@media(hover:none)]:border-rule [@media(hover:none)]:text-accent"
         title="Select this burst (⌘/Ctrl+A on the current burst)"
       >
         select
@@ -277,6 +277,20 @@ function ListCell({
         )}
         <span className="text-[11px] font-mono text-inkMute">{index + 1}</span>
       </span>
+      {onDrill && (
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label="Open in focus view"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDrill(index);
+          }}
+          className="hidden [@media(hover:none)]:flex items-center justify-center shrink-0 min-h-11 min-w-11 text-inkMute text-base"
+        >
+          ›
+        </span>
+      )}
     </button>
   );
 }
@@ -317,6 +331,20 @@ function GridCell({
         {isVideoKey(img.key) && (
           <span className="absolute top-1 left-1 bg-paperHover border border-rule text-inkSoft font-mono text-[10px] px-1 leading-tight">
             VIDEO
+          </span>
+        )}
+        {onDrill && (
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label="Open in focus view"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDrill(index);
+            }}
+            className="hidden [@media(hover:none)]:flex absolute top-1 right-1 items-center justify-center min-h-11 min-w-11 bg-panel/80 border border-rule text-inkMute text-base"
+          >
+            ›
           </span>
         )}
       </span>

@@ -44,7 +44,7 @@ export function SpeciesLoupe({ species, onClose }: { species: Species; onClose: 
           <button
             type="button"
             onClick={onClose}
-            className="ml-auto w-8 h-8 grid place-items-center text-[18px] leading-none text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="ml-auto w-11 h-11 md:w-8 md:h-8 grid place-items-center text-[18px] leading-none text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
             title="Close (Esc)"
             aria-label="Close"
           >
@@ -57,7 +57,7 @@ export function SpeciesLoupe({ species, onClose }: { species: Species; onClose: 
               src={species.iconUrl}
               alt={species.commonName}
               onError={() => setFailed(true)}
-              className="max-w-full max-h-[70vh] object-contain bg-paperHover border border-rule"
+              className="max-w-full max-h-[70svh] object-contain bg-paperHover border border-rule"
             />
           ) : (
             <div className="w-full h-48 grid place-items-center font-mono text-[13px] text-inkMute bg-paperHover border border-rule">

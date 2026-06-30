@@ -85,7 +85,7 @@ export function Settings() {
 
       {pendingResumable !== null && (
         <div className="fixed inset-0 z-50 bg-ink/40 grid place-items-center p-4">
-          <div className="w-[440px] bg-paper border border-ink shadow-xl">
+          <div className="w-full max-w-[440px] max-h-[90dvh] overflow-y-auto bg-paper border border-ink shadow-xl">
             <header className="border-b border-rule px-5 h-12 flex items-center">
               <h2 className="font-display text-[18px] text-ink">Unfinished uploads</h2>
             </header>
@@ -100,7 +100,7 @@ export function Settings() {
                 Finish or resume from History first, or discard and disconnect.
               </p>
             </div>
-            <footer className="flex justify-end gap-2 border-t border-rule px-5 py-3">
+            <footer className="flex flex-col sm:flex-row sm:justify-end gap-2 border-t border-rule px-5 py-3">
               <button
                 onClick={() => setPendingResumable(null)}
                 className="text-[13px] border border-rule px-3 py-1.5 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"

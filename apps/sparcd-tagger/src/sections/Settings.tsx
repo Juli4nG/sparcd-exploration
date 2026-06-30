@@ -63,10 +63,10 @@ export function Settings() {
 
       <section>
         <span className={kicker}>Sync default</span>
-        <label className="flex items-center gap-2.5 font-body text-[14px] text-ink">
+        <label className="flex items-center gap-2.5 min-h-11 md:min-h-0 font-body text-[14px] text-ink">
           <input
             type="checkbox"
-            className="w-4 h-4 accent-accent"
+            className="w-5 h-5 md:w-4 md:h-4 accent-accent"
             checked={dryRun}
             onChange={(e) => setDryRun(e.target.checked)}
           />
@@ -80,10 +80,10 @@ export function Settings() {
 
       <section>
         <span className={kicker}>Burst grouping</span>
-        <label className="flex items-center gap-2.5 font-body text-[14px] text-ink">
+        <label className="flex items-center gap-2.5 min-h-11 md:min-h-0 font-body text-[14px] text-ink">
           <input
             type="checkbox"
-            className="w-4 h-4 accent-accent"
+            className="w-5 h-5 md:w-4 md:h-4 accent-accent"
             checked={burstOn}
             onChange={(e) => setBurstOn(e.target.checked)}
           />
@@ -121,7 +121,7 @@ export function Settings() {
         <p className="text-[13px] font-mono text-inkSoft break-all">{cfg?.endpoint}</p>
         <button
           onClick={() => void logout()}
-          className="mt-3 text-[14px] border border-ink px-3 py-1.5 text-ink hover:bg-panelHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="mt-3 inline-flex items-center min-h-11 md:min-h-0 text-[14px] border border-ink px-3 py-2.5 md:py-1.5 text-ink hover:bg-panelHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           Disconnect
         </button>
@@ -133,7 +133,7 @@ export function Settings() {
 
       {pendingDirty !== null && (
         <div className="fixed inset-0 z-50 bg-ink/40 grid place-items-center p-4">
-          <div className="w-[440px] bg-paper border border-ink shadow-xl">
+          <div className="w-full max-w-[440px] max-h-[90dvh] overflow-y-auto bg-paper border border-ink shadow-xl">
             <header className="border-b border-rule px-5 h-12 flex items-center">
               <h2 className="font-display text-[18px] text-ink">Unsynced local edits</h2>
             </header>
@@ -147,10 +147,10 @@ export function Settings() {
                 Sync them to S3 first (open the upload from History), or discard them and disconnect.
               </p>
             </div>
-            <footer className="flex justify-end gap-2 border-t border-rule px-5 py-3">
+            <footer className="flex flex-col sm:flex-row sm:justify-end gap-2 border-t border-rule px-5 py-3">
               <button
                 onClick={() => setPendingDirty(null)}
-                className="text-[13px] border border-rule px-3 py-1.5 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                className="w-full sm:w-auto min-h-11 md:min-h-0 text-[13px] border border-rule px-3 py-2.5 md:py-1.5 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
               >
                 Cancel
               </button>
@@ -159,13 +159,13 @@ export function Settings() {
                   setPendingDirty(null);
                   setSection('history');
                 }}
-                className="text-[13px] border border-ink bg-ink text-paper px-3 py-1.5 hover:bg-inkSoft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                className="w-full sm:w-auto min-h-11 md:min-h-0 text-[13px] border border-ink bg-ink text-paper px-3 py-2.5 md:py-1.5 hover:bg-inkSoft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
               >
                 Review unsynced
               </button>
               <button
                 onClick={() => void wipeAndLogout()}
-                className="text-[13px] border border-warn text-warn px-3 py-1.5 hover:bg-warn hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                className="w-full sm:w-auto min-h-11 md:min-h-0 text-[13px] border border-warn text-warn px-3 py-2.5 md:py-1.5 hover:bg-warn hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
               >
                 Discard &amp; disconnect
               </button>

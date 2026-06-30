@@ -48,14 +48,14 @@ export function Cheatsheet({ onClose }: { onClose: () => void }) {
       aria-label="Keyboard shortcuts"
     >
       <div
-        className="w-full max-w-[640px] bg-paper border border-rule shadow-xl"
+        className="w-full max-w-[640px] max-h-[90dvh] overflow-y-auto bg-paper border border-rule shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-rule px-5 py-3">
           <h2 className="font-display text-[18px] font-[600] text-ink">Keyboard shortcuts</h2>
           <button
             onClick={onClose}
-            className="w-7 h-7 grid place-items-center border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="w-11 h-11 md:w-7 md:h-7 grid place-items-center border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
             aria-label="Close"
           >
             ✕
@@ -88,6 +88,11 @@ export function Cheatsheet({ onClose }: { onClose: () => void }) {
             </section>
           ))}
         </div>
+
+        <p className="lg:hidden border-t border-rule px-5 py-3 text-[12px] text-inkSoft font-body">
+          These are desktop keyboard accelerators. On touch, use the on-screen
+          controls.
+        </p>
       </div>
     </div>
   );

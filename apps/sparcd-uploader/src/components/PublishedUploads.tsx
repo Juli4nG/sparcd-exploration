@@ -189,7 +189,7 @@ function UploadCard({
         <div>
           <button
             onClick={() => setShowEdits((v) => !v)}
-            className="font-body text-[12px] text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="inline-flex min-h-[40px] items-center px-2 sm:min-h-0 sm:px-0 font-body text-[12px] text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
             aria-expanded={showEdits}
           >
             {showEdits ? '▾' : '▸'} {edits.length} edit{edits.length === 1 ? '' : 's'}
@@ -214,7 +214,7 @@ function UploadCard({
               setDescription(upload.meta.description);
               setNote(null);
             }}
-            className="border border-ink text-ink px-3 py-1 text-[13px] font-body hover:bg-paperHover"
+            className="border border-ink text-ink min-h-[44px] px-4 py-1 sm:min-h-0 sm:px-3 text-[13px] font-body hover:bg-paperHover"
           >
             Edit description
           </button>
@@ -223,7 +223,7 @@ function UploadCard({
               setMode('deployment');
               setNote(null);
             }}
-            className="border border-ink text-ink px-3 py-1 text-[13px] font-body hover:bg-paperHover"
+            className="border border-ink text-ink min-h-[44px] px-4 py-1 sm:min-h-0 sm:px-3 text-[13px] font-body hover:bg-paperHover"
           >
             Correct location
           </button>
@@ -238,18 +238,18 @@ function UploadCard({
             rows={3}
             className="w-full border border-rule bg-paper px-2.5 py-1.5 font-body text-[14px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <button
               disabled={busy}
               onClick={() => void saveDescription()}
-              className="bg-ink text-paper border border-ink px-3 py-1 text-[13px] font-body font-[600] hover:opacity-90 disabled:opacity-40"
+              className="bg-ink text-paper border border-ink min-h-[44px] px-4 py-1 sm:min-h-0 sm:px-3 text-[13px] font-body font-[600] hover:opacity-90 disabled:opacity-40"
             >
               {busy ? 'Saving…' : dryRun ? 'Save (dry run)' : 'Save'}
             </button>
             <button
               disabled={busy}
               onClick={() => setMode('none')}
-              className="border border-ink text-ink px-3 py-1 text-[13px] font-body hover:bg-paperHover"
+              className="border border-ink text-ink min-h-[44px] px-4 py-1 sm:min-h-0 sm:px-3 text-[13px] font-body hover:bg-paperHover"
             >
               Cancel
             </button>
@@ -265,18 +265,18 @@ function UploadCard({
             onChange={setLocationKey}
             elevationUnit={elevationUnit}
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <button
               disabled={busy || !locationKey}
               onClick={() => void saveDeployment()}
-              className="bg-ink text-paper border border-ink px-3 py-1 text-[13px] font-body font-[600] hover:opacity-90 disabled:opacity-40"
+              className="bg-ink text-paper border border-ink min-h-[44px] px-4 py-1 sm:min-h-0 sm:px-3 text-[13px] font-body font-[600] hover:opacity-90 disabled:opacity-40"
             >
               {busy ? 'Saving…' : dryRun ? 'Re-stamp (dry run)' : 'Re-stamp'}
             </button>
             <button
               disabled={busy}
               onClick={() => setMode('none')}
-              className="border border-ink text-ink px-3 py-1 text-[13px] font-body hover:bg-paperHover"
+              className="border border-ink text-ink min-h-[44px] px-4 py-1 sm:min-h-0 sm:px-3 text-[13px] font-body hover:bg-paperHover"
             >
               Cancel
             </button>

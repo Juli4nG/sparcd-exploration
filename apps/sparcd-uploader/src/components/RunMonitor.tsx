@@ -2,7 +2,7 @@
 // History resume flow. Driven entirely by an `UploadSnapshot`, so both callers
 // render identical progress, byte counts, and the streaming PUT log.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { formatBytes } from '../lib/scanFiles';
 import type { FileState, UploadSnapshot } from '../lib/upload';
@@ -41,7 +41,10 @@ function ProgressList({ snap }: { snap: UploadSnapshot }) {
   });
 
   return (
-    <div ref={parentRef} className="h-[40vh] overflow-auto border border-rule bg-panel">
+    <div
+      ref={parentRef}
+      className="max-h-64 sm:max-h-none sm:h-[40dvh] overflow-auto overscroll-contain border border-rule bg-panel"
+    >
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
         {virtualizer.getVirtualItems().map((vi) => {
           const f = files[vi.index];
@@ -50,7 +53,7 @@ function ProgressList({ snap }: { snap: UploadSnapshot }) {
           return (
             <div
               key={f.id}
-              className="absolute left-0 right-0 grid grid-cols-[14px_1fr_120px_72px] items-center gap-3 px-3 border-b border-ruleSoft"
+              className="absolute left-0 right-0 grid grid-cols-[14px_1fr_auto] sm:grid-cols-[14px_1fr_120px_72px] items-center gap-x-3 gap-y-1 px-3 border-b border-ruleSoft"
               style={{ height: ROW, transform: `translateY(${vi.start}px)` }}
             >
               <span
@@ -58,7 +61,7 @@ function ProgressList({ snap }: { snap: UploadSnapshot }) {
                 title={f.error ?? f.state}
                 aria-hidden
               />
-              <span className="min-w-0">
+              <span className="min-w-0 col-span-2 sm:col-span-1">
                 <span className="block truncate font-mono text-[12px] text-ink" title={f.key}>
                   {tail}
                 </span>
@@ -68,13 +71,13 @@ function ProgressList({ snap }: { snap: UploadSnapshot }) {
                   </span>
                 )}
               </span>
-              <span className="h-1.5 bg-paperHover border border-ruleSoft overflow-hidden">
+              <span className="col-start-2 row-start-2 sm:col-start-3 sm:row-start-1 h-1.5 bg-paperHover border border-ruleSoft overflow-hidden">
                 <span
                   className={`block h-full ${f.state === 'failed' ? 'bg-warn' : 'bg-accent'}`}
                   style={{ width: `${f.state === 'done' || f.state === 'skipped' ? 100 : pct}%` }}
                 />
               </span>
-              <span className="font-mono text-[11px] text-inkSoft text-right">
+              <span className="col-start-3 row-start-2 sm:col-start-4 sm:row-start-1 font-mono text-[11px] text-inkSoft text-right">
                 {f.state === 'uploading' || f.state === 'verifying' ? `${Math.round(pct)}%` : f.state}
               </span>
             </div>
@@ -104,7 +107,7 @@ function LogPanel({ snap }: { snap: UploadSnapshot }) {
   return (
     <div
       ref={ref}
-      className="h-[24vh] overflow-auto border border-ruleSoft bg-paper px-3 py-2 font-mono text-[11.5px] leading-[1.55]"
+      className="max-h-48 sm:max-h-none sm:h-[24dvh] overflow-auto overscroll-contain border border-ruleSoft bg-paper px-3 py-2 font-mono text-[11.5px] leading-[1.55]"
     >
       {tail.map((l, i) => (
         <div key={i} className={`break-all ${LOG_TONE[l.kind]}`}>
@@ -118,6 +121,7 @@ function LogPanel({ snap }: { snap: UploadSnapshot }) {
 }
 
 export function RunMonitor({ snap }: { snap: UploadSnapshot }) {
+  const [showLog, setShowLog] = useState(false);
   const counts = snap.files.reduce(
     (a, f) => ((a[f.state] = (a[f.state] ?? 0) + 1), a),
     {} as Record<FileState, number>,
@@ -126,7 +130,7 @@ export function RunMonitor({ snap }: { snap: UploadSnapshot }) {
 
   return (
     <section className="space-y-3">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <p className="font-body text-[13px] text-inkSoft">
           <span className="font-mono text-ink uppercase tracking-[0.12em] text-[11px]">{snap.phase}</span>
           {snap.dryRun && <span className="ml-2 text-warn">dry run</span>}
@@ -145,7 +149,7 @@ export function RunMonitor({ snap }: { snap: UploadSnapshot }) {
             </>
           ) : null}
         </p>
-        <p className="font-mono text-[12px] text-inkSoft">
+        <p className="shrink-0 font-mono text-[12px] text-inkSoft">
           {formatBytes(snap.uploadedBytes)} / {formatBytes(snap.totalBytes)}
         </p>
       </div>
@@ -169,7 +173,19 @@ export function RunMonitor({ snap }: { snap: UploadSnapshot }) {
       {snap.phase === 'error' && <Note tone="warn" message={snap.error ?? 'Upload failed.'} />}
 
       <ProgressList snap={snap} />
-      <LogPanel snap={snap} />
+
+      <button
+        type="button"
+        onClick={() => setShowLog((v) => !v)}
+        aria-expanded={showLog}
+        className="sm:hidden flex w-full items-center justify-between min-h-11 px-3 border border-ruleSoft bg-paper font-mono text-[11px] uppercase tracking-[0.12em] text-inkSoft"
+      >
+        <span>Activity log</span>
+        <span aria-hidden>{showLog ? '−' : '+'}</span>
+      </button>
+      <div className={`${showLog ? 'block' : 'hidden'} sm:block`}>
+        <LogPanel snap={snap} />
+      </div>
     </section>
   );
 }

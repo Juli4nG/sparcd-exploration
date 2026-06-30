@@ -18,13 +18,26 @@ export function Chrome({ uploadState, children }: { uploadState: UploadState; ch
   const disconnect = useStore((s) => s.disconnect);
 
   return (
-    <div className="min-h-screen flex flex-col bg-paper">
-      <header className="h-14 shrink-0 bg-panel border-b border-rule flex items-stretch px-4">
+    <div className="min-h-[100svh] flex flex-col bg-paper">
+      <header className="min-h-14 shrink-0 bg-panel border-b border-rule flex flex-wrap items-center gap-y-2 py-2 px-4 md:h-14 md:flex-nowrap md:items-stretch md:py-0">
         <div className="flex items-center pr-6">
           <BrandSwitcher toolName="Uploader" />
         </div>
 
-        <nav className="flex items-stretch" aria-label="Sections">
+        <select
+          aria-label="Section"
+          value={section}
+          onChange={(e) => setSection(e.target.value as Section)}
+          className="md:hidden min-h-11 bg-panel text-ink text-[14px] font-body border border-rule px-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {SECTIONS.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+
+        <nav className="hidden md:flex items-stretch" aria-label="Sections">
           {SECTIONS.map((s) => {
             const active = s.id === section;
             return (
@@ -43,12 +56,12 @@ export function Chrome({ uploadState, children }: { uploadState: UploadState; ch
           })}
         </nav>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
           <StatePill state={uploadState} />
           <ConnectionChip identity={uploaderUser || undefined} onDisconnect={disconnect} />
           <button
             onClick={toggleTheme}
-            className="w-8 h-8 grid place-items-center border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+            className="w-11 h-11 sm:w-8 sm:h-8 grid place-items-center border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
             aria-label={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
             title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
           >

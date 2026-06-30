@@ -44,7 +44,7 @@ export function PerImageTime({
 
   if (editing) {
     return (
-      <span className="inline-flex items-center gap-2 border border-ink outline outline-2 outline-accent px-2 py-1 bg-paper">
+      <span className="inline-flex flex-wrap items-center gap-2 border border-ink outline outline-2 outline-accent px-2 py-1 bg-paper min-w-0">
         <span className="font-mono text-[11px] text-inkSoft" aria-hidden>
           ◷
         </span>
@@ -62,7 +62,7 @@ export function PerImageTime({
           aria-invalid={invalid}
           spellCheck={false}
           autoFocus
-          className={`bg-transparent border-none outline-none font-mono text-[13px] text-ink w-[160px] ${
+          className={`bg-transparent border-none outline-none font-mono text-[13px] text-ink w-full sm:w-[160px] ${
             invalid ? 'text-warn' : ''
           }`}
           placeholder="YYYY-MM-DD HH:mm:ss"
@@ -84,7 +84,7 @@ export function PerImageTime({
   }
 
   return (
-    <span className="inline-flex items-center gap-2.5">
+    <span className="inline-flex flex-wrap items-center gap-2.5 min-w-0">
       <span className="flex flex-col leading-tight">
         <span className="font-mono text-[13.5px] font-[600] text-ink">
           {corrected || '— no timestamp —'}

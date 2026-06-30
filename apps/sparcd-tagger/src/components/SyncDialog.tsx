@@ -113,13 +113,13 @@ export function SyncDialog({
 
   return (
     <Backdrop onClose={busy ? undefined : onClose}>
-      <div className="w-[480px] bg-paper border border-ink shadow-xl">
+      <div className="w-full max-w-[480px] max-h-[calc(100dvh-2rem)] overflow-y-auto bg-paper border border-ink shadow-xl">
         <header className="flex items-center justify-between border-b border-rule px-5 h-12">
           <h2 className="font-display text-[18px] text-ink">Sync to S3</h2>
           <button
             onClick={onClose}
             disabled={busy}
-            className="text-inkMute hover:text-ink text-[18px] leading-none disabled:opacity-30"
+            className="max-md:w-11 max-md:h-11 max-md:grid max-md:place-items-center text-inkMute hover:text-ink text-[18px] leading-none disabled:opacity-30"
             aria-label="Close"
           >
             ×
@@ -248,7 +248,7 @@ function SummaryGrid({
     ['Time-corrected', summary.timeCorrections],
   ];
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
       {cells.map(([label, n]) => (
         <div key={label} className="border border-rule px-2 py-1.5 text-center">
           <div className="font-mono text-[18px] text-ink leading-none">{n}</div>
@@ -286,8 +286,8 @@ function syncStateFor(r: SyncResult, dryRun: boolean): ReturnType<typeof useStor
 }
 
 const btnGhost =
-  'text-[13px] border border-rule px-3 py-1.5 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'text-[13px] border border-rule px-3 py-2.5 md:py-1.5 min-h-11 md:min-h-0 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
 const btnPrimary =
-  'text-[13px] border border-ink bg-ink text-paper px-3 py-1.5 hover:bg-inkSoft disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'text-[13px] border border-ink bg-ink text-paper px-3 py-2.5 md:py-1.5 min-h-11 md:min-h-0 hover:bg-inkSoft disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
 const btnWarn =
-  'text-[13px] border border-warn text-warn px-3 py-1.5 hover:bg-warn hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'text-[13px] border border-warn text-warn px-3 py-2.5 md:py-1.5 min-h-11 md:min-h-0 hover:bg-warn hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';

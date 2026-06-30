@@ -111,7 +111,7 @@ function Chip({
       )}
       <button
         onClick={onRemove}
-        className="w-5 h-5 grid place-items-center text-inkMute hover:text-warn focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+        className="min-w-11 min-h-11 md:min-w-0 md:min-h-0 md:w-5 md:h-5 grid place-items-center text-inkMute hover:text-warn focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
         title="Remove this species"
         aria-label={`Remove ${labelOf(obs)}`}
       >

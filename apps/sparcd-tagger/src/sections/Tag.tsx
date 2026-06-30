@@ -337,6 +337,24 @@ export function Tag() {
     setView('focus');
   };
 
+  // On-screen prev/next (Focus footer) mirror the j/k/arrow path: clamp, move
+  // focus, re-anchor, clear any selection.
+  const gotoImage = (i: number) => {
+    const clamped = Math.max(0, Math.min(i, list.length - 1));
+    setFocus(clamped);
+    setAnchor(clamped);
+    setSelected(new Set());
+  };
+
+  // On-screen questionable toggle mirrors the `x` key: act on the selection (or
+  // the focused image), flipping off the focused image's current state.
+  const toggleQuestionable = () => {
+    const targets = targetsOf();
+    if (!targets.length || !current) return;
+    const anchorDraft = drafts[current.key];
+    setQuestionableManyFn(ctx, targets, !anchorDraft?.questionable);
+  };
+
   // --- Global key handler: attached once, reads the latest state via a ref so
   // it never re-binds per render (plan perf requirement). ----------------------
   const stateRef = useRef<HandlerState>(null!);
@@ -399,9 +417,9 @@ export function Tag() {
     : '';
 
   return (
-    <div className="h-full flex flex-col min-h-0">
+    <div className="h-[100dvh] lg:h-full flex flex-col min-h-0">
       {/* Workspace toolbar: mode + view switches, position, selection, save */}
-      <div className="shrink-0 h-10 border-b border-rule bg-panel flex items-center gap-3 px-3">
+      <div className="shrink-0 min-h-10 border-b border-rule bg-panel flex flex-wrap items-center gap-3 gap-y-2 px-3">
         <Segmented
           value={view}
           onChange={(v) => setView(v as View)}
@@ -430,6 +448,17 @@ export function Tag() {
             </>
           )}
         </span>
+
+        {/* Touch path for building a multi-select set (desktop uses Shift/Cmd
+            click). Toggles the focused image in/out of the selection. */}
+        <button
+          onClick={() => setSelected(toggleIndex(selected, focus))}
+          aria-pressed={selected.has(focus)}
+          className="lg:hidden min-h-11 inline-flex items-center text-[11.5px] font-mono px-2 border border-rule text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent aria-pressed:bg-mark aria-pressed:border-ink aria-pressed:text-ink"
+          title="Add or remove this image from the selection"
+        >
+          {selected.has(focus) ? '✓ In selection' : '＋ Select'}
+        </button>
 
         {/* Upload time-shift entry + persistent active-offset indicator (§08). */}
         <button
@@ -495,7 +524,7 @@ export function Tag() {
               <button
                 onClick={() => jumpToMatch(matchPos - 1)}
                 disabled={!matches.length}
-                className="text-[12px] text-inkSoft hover:text-ink disabled:opacity-40 px-0.5"
+                className="text-[12px] text-inkSoft hover:text-ink disabled:opacity-40 px-0.5 min-h-11 min-w-11 sm:min-h-0 sm:min-w-0"
                 title="Previous match"
                 aria-label="Previous match"
               >
@@ -504,7 +533,7 @@ export function Tag() {
               <button
                 onClick={() => jumpToMatch(matchPos + 1)}
                 disabled={!matches.length}
-                className="text-[12px] text-inkSoft hover:text-ink disabled:opacity-40 px-0.5"
+                className="text-[12px] text-inkSoft hover:text-ink disabled:opacity-40 px-0.5 min-h-11 min-w-11 sm:min-h-0 sm:min-w-0"
                 title="Next match"
                 aria-label="Next match"
               >
@@ -515,7 +544,7 @@ export function Tag() {
                   setImgQuery('');
                   imgSearchRef.current?.focus();
                 }}
-                className="text-[12px] text-inkMute hover:text-ink px-0.5"
+                className="text-[12px] text-inkMute hover:text-ink px-0.5 min-h-11 min-w-11 sm:min-h-0 sm:min-w-0"
                 title="Clear"
                 aria-label="Clear image search"
               >
@@ -525,8 +554,28 @@ export function Tag() {
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex flex-wrap items-center gap-3">
           {savedAt > 0 && <span className="text-[12px] font-mono text-accent">saved ✓</span>}
+          {/* On-screen Save mirrors ⌘S for touch; desktop keeps the hotkey. */}
+          <button
+            onClick={() => {
+              void flushSaves();
+              setSavedAt(Date.now());
+            }}
+            className="lg:hidden min-h-11 text-[12px] font-mono border border-ink px-2.5 text-ink hover:bg-panelHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            title="Save local edits (⌘S)"
+          >
+            Save
+          </button>
+          {/* On-screen Help opens the same cheatsheet the ? key toggles. */}
+          <button
+            onClick={() => setShowCheatsheet(true)}
+            className="lg:hidden min-h-11 min-w-11 grid place-items-center text-[14px] font-mono border border-rule text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            title="Keyboard shortcuts & help"
+            aria-label="Help"
+          >
+            ?
+          </button>
           {nDirty > 0 && (
             <button
               onClick={() => {
@@ -557,8 +606,8 @@ export function Tag() {
 
       <div className="flex-1 min-h-0">
         {view === 'overview' ? (
-          <div className="h-full grid grid-cols-[1fr_340px] min-h-0">
-            <div className="flex flex-col min-h-0">
+          <div className="h-full grid grid-cols-1 lg:grid-cols-[1fr_340px] min-h-0 overflow-y-auto lg:overflow-visible">
+            <div className="flex flex-col min-h-[60svh] lg:min-h-0">
               <SortBar field={sortField} dir={sortDir} onSort={handleSort} />
               <div className="flex-1 min-h-0">
                 <Overview
@@ -576,16 +625,21 @@ export function Tag() {
             <SpeciesPanel {...speciesPanelProps()} />
           </div>
         ) : (
-          <div className="h-full grid grid-cols-[280px_1fr_340px] grid-rows-[minmax(0,1fr)] min-h-0">
-            <Overview
-              list={list}
-              grouping={grouping}
-              focus={focus}
-              selected={selected}
-              kind="list"
-              onPick={pick}
-              onSelectBurst={selectBurst}
-            />
+          <div className="h-full grid grid-cols-1 lg:grid-cols-[280px_1fr_340px] grid-rows-none lg:grid-rows-[minmax(0,1fr)] min-h-0 overflow-y-auto lg:overflow-visible">
+            {/* On phones the 280px rail becomes a capped filmstrip above the
+                image; lg:contents dissolves the wrapper so desktop keeps the
+                Overview list as a direct grid child. */}
+            <div className="h-[30svh] overflow-y-auto lg:h-auto lg:overflow-visible lg:contents">
+              <Overview
+                list={list}
+                grouping={grouping}
+                focus={focus}
+                selected={selected}
+                kind="list"
+                onPick={pick}
+                onSelectBurst={selectBurst}
+              />
+            </div>
             <FocusPane
               current={current}
               eff={eff}
@@ -600,6 +654,9 @@ export function Tag() {
                 current && setTimeOverrideFn(ctx, current.key, current.deploymentId, currentBase, null)
               }
               onDetag={() => detagFn(ctx, targetsOf())}
+              onPrev={() => gotoImage(focus - 1)}
+              onNext={() => gotoImage(focus + 1)}
+              onToggleQuestionable={toggleQuestionable}
             />
             <SpeciesPanel {...speciesPanelProps()} />
           </div>
@@ -690,6 +747,9 @@ function FocusPane({
   onSetTime,
   onClearTime,
   onDetag,
+  onPrev,
+  onNext,
+  onToggleQuestionable,
 }: {
   current: TagImage | undefined;
   eff: Effective | null;
@@ -700,6 +760,9 @@ function FocusPane({
   onSetTime: (iso: string) => void;
   onClearTime: () => void;
   onDetag: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+  onToggleQuestionable: () => void;
 }) {
   // View-only display adjustments live here so they reset to neutral when the
   // user leaves Focus (this component unmounts) and stay sticky while paging
@@ -709,11 +772,13 @@ function FocusPane({
   const showAdjust = !!current && !isVideoKey(current.key);
 
   return (
-    <div className="flex flex-col min-h-0 bg-paper">
+    <div className="flex flex-col min-h-[55svh] lg:min-h-0 bg-paper">
       <div className="relative flex-1 min-h-0 grid place-items-center p-4 overflow-hidden">
         {current && <FocusImage objectKey={current.key} alt={current.fileName} filter={filter} />}
         {showAdjust && (
-          <div className="absolute bottom-4 left-4 z-10">
+          // On phones the zoom controls own bottom-right, so park adjustments at
+          // top-left to keep both off the squeezed image; restore bottom-left ≥lg.
+          <div className="absolute top-4 left-4 lg:top-auto lg:bottom-4 z-10">
             <ImageAdjustments
               value={adjustments}
               onChange={setAdjustments}
@@ -724,6 +789,25 @@ function FocusPane({
       </div>
       {current && eff && (
         <div className="shrink-0 border-t border-rule bg-panel px-5 py-3 flex items-center gap-5 flex-wrap">
+          {/* On-screen prev/next mirror j/k for touch; desktop keeps the keys. */}
+          <div className="lg:hidden flex items-center gap-2">
+            <button
+              onClick={onPrev}
+              className="min-h-11 min-w-11 grid place-items-center text-[18px] leading-none border border-rule text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              title="Previous image (k)"
+              aria-label="Previous image"
+            >
+              ‹
+            </button>
+            <button
+              onClick={onNext}
+              className="min-h-11 min-w-11 grid place-items-center text-[18px] leading-none border border-rule text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              title="Next image (j)"
+              aria-label="Next image"
+            >
+              ›
+            </button>
+          </div>
           <div className="min-w-0">
             <div className="text-[14px] font-mono text-ink truncate" title={current.fileName}>
               {current.fileName} <span className="text-inkMute">· {shortDeployment(current.deploymentId)}</span>
@@ -748,6 +832,17 @@ function FocusPane({
             )}
             {/* The applied species themselves render in the SpeciesPanel header
                 strip on the right; the footer keeps only questionable + Detag. */}
+            {/* Touch toggle mirrors the `x` key; desktop relies on the hotkey
+                and the display-only badge above. */}
+            <button
+              onClick={onToggleQuestionable}
+              disabled={!current}
+              aria-pressed={eff.questionable}
+              className="lg:hidden min-h-11 text-[13px] border border-rule px-2.5 text-inkSoft hover:text-ink hover:border-ink disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent aria-pressed:bg-mark aria-pressed:border-warn aria-pressed:text-warn"
+              title="Toggle questionable (x)"
+            >
+              {eff.questionable ? '✓ Questionable' : 'Questionable'}
+            </button>
             <button
               onClick={onDetag}
               disabled={eff.observations.length === 0}
@@ -782,7 +877,7 @@ function SortBar({
   onSort: (f: SortField) => void;
 }) {
   return (
-    <div className="shrink-0 flex items-center gap-4 px-3 h-8 border-b border-rule bg-panel">
+    <div className="shrink-0 flex items-center gap-4 px-3 h-8 min-h-11 sm:min-h-0 border-b border-rule bg-panel">
       <span className="text-[11px] font-[600] tracking-[0.14em] uppercase text-inkMute">Sort</span>
       {SORT_FIELDS.map((s) => {
         const active = s.field === field;
@@ -791,7 +886,7 @@ function SortBar({
             key={s.field}
             onClick={() => onSort(s.field)}
             aria-pressed={active}
-            className={`text-[11px] font-[600] tracking-[0.14em] uppercase focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+            className={`text-[11px] font-[600] tracking-[0.14em] uppercase min-h-11 sm:min-h-0 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
               active ? 'text-ink' : 'text-inkSoft hover:text-ink'
             }`}
           >
@@ -820,7 +915,7 @@ function Segmented({
           key={o.value}
           onClick={() => onChange(o.value)}
           aria-pressed={o.value === value}
-          className={`px-2.5 py-1 text-[12px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+          className={`px-2.5 py-1 min-h-11 sm:min-h-0 text-[12px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
             o.value === value ? 'bg-ink text-paper' : 'text-inkSoft hover:bg-panelHover'
           }`}
         >
@@ -963,7 +1058,7 @@ function Lightbox({
         <button
           type="button"
           onClick={onClose}
-          className="w-8 h-8 grid place-items-center text-[18px] leading-none text-paper/80 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="w-11 h-11 md:w-8 md:h-8 grid place-items-center text-[18px] leading-none text-paper/80 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           title="Close (Esc)"
           aria-label="Close"
         >
@@ -1020,14 +1115,14 @@ function ZoomControls({
   const surface = dark
     ? 'bg-ink/60 border-paper/20 divide-paper/20'
     : 'bg-panel/90 border-rule divide-rule';
-  const btn = `w-8 h-8 grid place-items-center text-[15px] leading-none ${tone} focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`;
+  const btn = `w-11 h-11 md:w-8 md:h-8 grid place-items-center text-[15px] leading-none ${tone} focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`;
   return (
     <div className="absolute bottom-4 right-4 flex flex-col items-end gap-2">
       {onReset && (
         <button
           type="button"
           onClick={onReset}
-          className={`flex items-center gap-1.5 px-3 h-8 border shadow-sm text-[13px] font-mono ${surface} ${tone} focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`}
+          className={`flex items-center gap-1.5 px-3 h-11 md:h-8 border shadow-sm text-[13px] font-mono ${surface} ${tone} focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`}
           title="Reset to fit"
         >
           ⤢ Reset

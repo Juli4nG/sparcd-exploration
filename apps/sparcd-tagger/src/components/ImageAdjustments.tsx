@@ -44,7 +44,7 @@ export function ImageAdjustments({
                 step={1}
                 value={value[f.key]}
                 onChange={(e) => onChange({ ...value, [f.key]: Number(e.target.value) })}
-                className="w-full accent-accent"
+                className="w-full accent-accent py-2 sm:py-0"
                 aria-label={f.label}
               />
             </label>
@@ -53,7 +53,7 @@ export function ImageAdjustments({
             type="button"
             onClick={onReset}
             disabled={neutral}
-            className="self-end text-[12px] font-mono border border-rule px-2 py-0.5 text-inkSoft hover:text-ink hover:border-ink disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="self-end text-[12px] font-mono border border-rule px-3 py-2.5 min-h-[44px] sm:px-2 sm:py-0.5 sm:min-h-0 text-inkSoft hover:text-ink hover:border-ink disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           >
             Reset
           </button>
@@ -63,7 +63,7 @@ export function ImageAdjustments({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-pressed={open}
-        className="text-[12px] font-mono border border-rule bg-panel/95 px-2 py-0.5 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="text-[12px] font-mono border border-rule bg-panel/95 px-3 py-2.5 min-h-[44px] sm:px-2 sm:py-0.5 sm:min-h-0 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         title="View-only image adjustments (does not change the file)"
       >
         Adjust {open ? '▴' : '▾'}

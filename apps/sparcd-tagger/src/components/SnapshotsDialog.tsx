@@ -35,7 +35,7 @@ export function SnapshotsDialog({ ctx, onClose }: { ctx: UploadCtx; onClose: () 
 
   return (
     <Backdrop onClose={busy ? undefined : onClose}>
-      <div className="w-[520px] bg-paper border border-ink shadow-xl">
+      <div className="w-full max-w-[520px] max-h-[90dvh] overflow-y-auto bg-paper border border-ink shadow-xl">
         <header className="flex items-center justify-between border-b border-rule px-5 h-12">
           <h2 className="font-display text-[18px] text-ink">
             {picked ? 'Restore snapshot' : 'Snapshots'}
@@ -43,7 +43,7 @@ export function SnapshotsDialog({ ctx, onClose }: { ctx: UploadCtx; onClose: () 
           <button
             onClick={onClose}
             disabled={busy}
-            className="text-inkMute hover:text-ink text-[18px] leading-none disabled:opacity-30"
+            className="max-md:w-11 max-md:h-11 max-md:grid max-md:place-items-center text-inkMute hover:text-ink text-[18px] leading-none disabled:opacity-30"
             aria-label="Close"
           >
             ×
@@ -59,7 +59,7 @@ export function SnapshotsDialog({ ctx, onClose }: { ctx: UploadCtx; onClose: () 
             onBusyChange={setBusy}
           />
         ) : (
-          <div className="px-5 py-4 space-y-3 text-[14px] text-ink font-body max-h-[60vh] overflow-y-auto">
+          <div className="px-5 py-4 space-y-3 text-[14px] text-ink font-body max-h-[60dvh] overflow-y-auto">
             <p className="text-[13px] text-inkSoft">
               Immutable pre-change snapshots of this upload’s canonical files, written before each
               sync. Restoring one writes its versions back in place (after snapshotting the current
@@ -356,8 +356,8 @@ function syncStateFor(r: SyncResult, dryRun: boolean): ReturnType<typeof useStor
 }
 
 const btnGhost =
-  'text-[13px] border border-rule px-3 py-1.5 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'text-[13px] border border-rule px-3 py-2.5 md:py-1.5 min-h-11 md:min-h-0 text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
 const btnPrimary =
-  'text-[13px] border border-ink bg-ink text-paper px-3 py-1.5 hover:bg-inkSoft disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'text-[13px] border border-ink bg-ink text-paper px-3 py-2.5 md:py-1.5 min-h-11 md:min-h-0 hover:bg-inkSoft disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
 const btnWarn =
-  'text-[13px] border border-warn text-warn px-3 py-1.5 hover:bg-warn hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'text-[13px] border border-warn text-warn px-3 py-2.5 md:py-1.5 min-h-11 md:min-h-0 hover:bg-warn hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';

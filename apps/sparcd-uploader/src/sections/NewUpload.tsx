@@ -36,7 +36,7 @@ export function NewUpload() {
 
       {step === 'inspect' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="font-body text-[14px] text-inkSoft">
               <span className="font-mono text-ink">{files.length}</span> files ·{' '}
               <span className="font-mono text-ink">{formatBytes(totalBytes)}</span>
@@ -59,10 +59,10 @@ export function NewUpload() {
                 </>
               )}
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
               <button
                 onClick={resetBatch}
-                className="border border-ink text-ink px-3.5 py-1.5 text-[14px] font-body hover:bg-paperHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+                className="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 border border-ink text-ink px-3.5 py-2.5 sm:py-1.5 text-[14px] font-body hover:bg-paperHover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
               >
                 Start over
               </button>
@@ -76,7 +76,7 @@ export function NewUpload() {
                       ? 'Wait for processing to finish'
                       : 'Resolve files that need attention first'
                 }
-                className={`bg-ink text-paper border border-ink px-3.5 py-1.5 text-[14px] font-body font-[600] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
+                className={`flex-1 sm:flex-none min-h-[44px] sm:min-h-0 bg-ink text-paper border border-ink px-3.5 py-2.5 sm:py-1.5 text-[14px] font-body font-[600] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
                   summary.ready ? 'hover:opacity-90' : 'opacity-40 cursor-not-allowed'
                 }`}
               >

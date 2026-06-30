@@ -129,7 +129,7 @@ function LocalEdits() {
           {groups.map((g) => (
             <li
               key={`${g.bucket}::${g.uploadPrefix}`}
-              className="border border-rule bg-panel px-4 py-3 flex items-center gap-4"
+              className="border border-rule bg-panel px-4 py-3 flex flex-col items-stretch sm:flex-row sm:items-center gap-4"
             >
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-[14px] text-ink truncate" title={g.uploadPrefix}>
@@ -142,13 +142,13 @@ function LocalEdits() {
                   {g.count} unsaved · {g.taggedCount} tagged · edited {shortTime(g.lastEdited)}
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button onClick={() => open(g)} className={btnInk}>
+              <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                <button onClick={() => open(g)} className={`${btnInk} flex-1 sm:flex-none`}>
                   Open →
                 </button>
                 <button
                   onClick={() => void discard(g)}
-                  className="text-[13px] border border-rule px-3 py-1.5 text-inkSoft hover:text-warn hover:border-warn focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                  className="flex-1 sm:flex-none text-[13px] border border-rule px-3 py-1.5 text-inkSoft hover:text-warn hover:border-warn focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                 >
                   Discard
                 </button>
@@ -245,10 +245,10 @@ function Snapshots() {
                 {u.snapshots.map((s) => (
                   <li
                     key={s.prefix}
-                    className="px-4 py-2 flex items-center gap-3 text-[12px] font-body"
+                    className="px-4 py-2 flex flex-wrap items-center gap-3 text-[12px] font-body"
                   >
                     <span className="font-mono text-[13px] text-ink">{prettyStamp(s.stamp)}</span>
-                    <span className="text-inkSoft">
+                    <span className="text-inkSoft min-w-0 truncate">
                       by <span className="font-mono">{s.user}</span>
                     </span>
                     <span className="text-inkMute ml-auto">{s.manifest.files.length} files</span>

@@ -168,7 +168,7 @@ function Row(p: RowProps) {
             e.preventDefault();
             p.onZoom!();
           }}
-          className="absolute top-2 left-3 w-4 h-4 grid place-items-center bg-ink/55 text-paper text-[10px] font-mono opacity-0 group-hover:opacity-100 focus:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+          className="absolute top-2 left-3 min-w-11 min-h-11 md:min-w-0 md:min-h-0 md:w-4 md:h-4 grid place-items-center bg-ink/55 text-paper text-[10px] font-mono opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
           title="Enlarge reference"
           aria-label={`Enlarge ${p.common} reference image`}
         >
@@ -215,7 +215,7 @@ function Row(p: RowProps) {
             {p.onStartCapture && (
               <button
                 onClick={p.onStartCapture}
-                className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-[11px] font-mono text-inkSoft hover:text-ink underline decoration-dotted focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                className="inline-flex items-center justify-center min-w-11 min-h-11 md:min-w-0 md:min-h-0 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus:opacity-100 text-[11px] font-mono text-inkSoft hover:text-ink underline decoration-dotted focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
                 title="Assign a key to this species"
               >
                 {p.badge ? 'rebind' : 'assign key'}
@@ -224,7 +224,7 @@ function Row(p: RowProps) {
             {p.onClearKey && (
               <button
                 onClick={p.onClearKey}
-                className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-[11px] font-mono text-inkMute hover:text-warn"
+                className="inline-flex items-center justify-center min-w-11 min-h-11 md:min-w-0 md:min-h-0 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus:opacity-100 text-[11px] font-mono text-inkMute hover:text-warn"
                 title="Clear this key"
                 aria-label={`Clear key for ${p.common}`}
               >

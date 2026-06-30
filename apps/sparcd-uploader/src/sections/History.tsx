@@ -295,12 +295,12 @@ export function History() {
                 )}
               </p>
 
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1">
                 {!batch.completedAt && (
                   <button
                     disabled={running}
                     onClick={() => void beginResume(batch)}
-                    className={`bg-ink text-paper border border-ink px-3 py-1 text-[13px] font-body font-[600] hover:opacity-90 ${
+                    className={`bg-ink text-paper border border-ink min-h-[44px] sm:min-h-0 px-4 sm:px-3 py-1 text-[13px] font-body font-[600] hover:opacity-90 ${
                       running ? 'opacity-40 cursor-not-allowed' : ''
                     }`}
                   >
@@ -310,7 +310,7 @@ export function History() {
                 <button
                   disabled={running && isActive}
                   onClick={() => void discard(batch.id)}
-                  className="border border-ink text-ink px-3 py-1 text-[13px] font-body hover:bg-paperHover"
+                  className="border border-ink text-ink min-h-[44px] sm:min-h-0 px-4 sm:px-3 py-1 text-[13px] font-body hover:bg-paperHover"
                 >
                   Discard
                 </button>

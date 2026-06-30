@@ -167,7 +167,7 @@ export function Assign() {
                 elevationUnit={elevationUnit}
               />
             )}
-            <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:flex-wrap">
               <p className="font-body text-[12px] text-inkMute">
                 <span className="font-mono text-inkSoft">{collectionLocations.length}</span> of{' '}
                 <span className="font-mono text-inkSoft">{data.locations.length}</span> locations —
@@ -184,7 +184,7 @@ export function Assign() {
                       type="button"
                       onClick={() => setElevationUnit(u)}
                       aria-pressed={elevationUnit === u}
-                      className={`px-2 py-0.5 text-[12px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+                      className={`px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-0.5 text-[12px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
                         elevationUnit === u ? 'bg-ink text-paper' : 'text-inkSoft hover:bg-panelHover'
                       }`}
                     >

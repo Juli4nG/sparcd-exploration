@@ -9,6 +9,13 @@ import {
   type ScannedFile,
 } from '../lib/scanFiles';
 
+// iOS Safari supports neither showDirectoryPicker nor a working
+// <input webkitdirectory>, so whole-folder selection is impossible there.
+// A coarse-only pointer without File System Access is our proxy for a touch
+// device that can't pick a folder; it falls back to a plain file picker.
+const supportsFolderPick =
+  supportsDirectoryHandle || !window.matchMedia?.('(pointer: coarse)').matches;
+
 export function DropZone() {
   const setFiles = useStore((s) => s.setFiles);
   const setScanning = useStore((s) => s.setScanning);
@@ -35,7 +42,8 @@ export function DropZone() {
   }
 
   // Prefer the File System Access picker so we can stash a durable handle for
-  // resume; fall back to the <input webkitdirectory> picker otherwise.
+  // resume; otherwise fall back to the rendered <input> — webkitdirectory on
+  // desktop, or a plain multi-file picker on touch where folders aren't pickable.
   async function chooseFolder() {
     if (supportsDirectoryHandle) {
       const handle = await pickDirectory();
@@ -43,6 +51,12 @@ export function DropZone() {
       return;
     }
     inputRef.current?.click();
+  }
+
+  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = e.target.files;
+    if (list && list.length) void commit(() => scanFileList(list));
+    e.target.value = '';
   }
 
   function onDrop(e: React.DragEvent) {
@@ -101,27 +115,40 @@ export function DropZone() {
             <p className="font-body text-[14px] text-inkSoft mb-5">
               JPEG and MP4. Subfolders are scanned recursively.
             </p>
-            <span className="inline-block bg-ink text-paper border border-ink px-4 py-2 text-[14px] font-body font-[600]">
-              Choose folder
+            <span className="inline-block min-h-11 md:min-h-0 bg-ink text-paper border border-ink px-4 py-2 text-[14px] font-body font-[600]">
+              {supportsFolderPick ? 'Choose folder' : 'Choose photos or videos'}
             </span>
+            {!supportsFolderPick && (
+              <p className="font-body text-[12px] text-inkSoft mt-3">
+                Whole-folder selection is desktop-only. On this device, pick
+                individual JPEG or MP4 files.
+              </p>
+            )}
           </>
         )}
       </div>
 
-      <input
-        ref={inputRef}
-        type="file"
-        // @ts-expect-error — non-standard but widely supported folder picker
-        webkitdirectory=""
-        directory=""
-        multiple
-        hidden
-        onChange={(e) => {
-          const list = e.target.files;
-          if (list && list.length) void commit(() => scanFileList(list));
-          e.target.value = '';
-        }}
-      />
+      {supportsFolderPick ? (
+        <input
+          ref={inputRef}
+          type="file"
+          // @ts-expect-error — non-standard but widely supported folder picker
+          webkitdirectory=""
+          directory=""
+          multiple
+          hidden
+          onChange={onPick}
+        />
+      ) : (
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/jpeg,video/mp4"
+          multiple
+          hidden
+          onChange={onPick}
+        />
+      )}
     </div>
   );
 }

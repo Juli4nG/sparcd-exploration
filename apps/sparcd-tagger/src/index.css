@@ -42,7 +42,34 @@
 html,
 body,
 #root {
+  /* Fallback first for engines without dynamic-viewport support; the dvh/svh
+     lines below override it where supported so mobile browser chrome no longer
+     hides bottom toolbars/footers. */
   height: 100%;
+  height: 100dvh;
+  min-height: 100svh;
+}
+
+/* Defensive guard: keep wide fixed grids from rubber-banding the whole page
+   sideways on phones. */
+html,
+body {
+  overflow-x: hidden;
+}
+
+#root {
+  overflow-x: clip;
+}
+
+/* Block iOS focus auto-zoom by keeping every field at >=16px on small screens.
+   !important is required to win over Tailwind's text-[Npx] utility classes
+   (higher specificity); scoped to <=640px so desktop field sizing is untouched. */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }
 
 /* Empty-state frontispiece: staggered settle-in, a left-pointing cue that

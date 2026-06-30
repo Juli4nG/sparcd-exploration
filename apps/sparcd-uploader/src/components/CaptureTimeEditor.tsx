@@ -68,7 +68,7 @@ export function CaptureTimeEditor({ files }: { files: FileEntry[] }) {
 
       <div className="max-h-[280px] overflow-auto border border-ruleSoft divide-y divide-ruleSoft">
         {needing.map((f) => (
-          <div key={f.id} className="flex items-center gap-2 px-2.5 py-1.5">
+          <div key={f.id} className="flex flex-col items-stretch gap-2 px-2.5 py-1.5 sm:flex-row sm:items-center">
             <span className="font-mono text-[12px] text-inkSoft truncate flex-1" title={f.relPath}>
               {f.relPath}
             </span>
@@ -77,13 +77,13 @@ export function CaptureTimeEditor({ files }: { files: FileEntry[] }) {
               step={1}
               value={f.manualNaive ? naiveToInputValue(f.manualNaive) : ''}
               onChange={(e) => setManualNaive(f.id, inputValueToNaive(e.target.value))}
-              className={inputClass}
+              className={`${inputClass} w-full sm:w-auto`}
             />
             {f.manualNaive && (
               <button
                 type="button"
                 onClick={() => setManualNaive(f.id, null)}
-                className="text-[12px] font-mono text-inkMute hover:text-warn px-1"
+                className="min-w-11 min-h-11 grid place-items-center text-[12px] font-mono text-warn sm:text-inkMute sm:hover:text-warn md:min-w-0 md:min-h-0 md:px-1"
                 title="Clear"
                 aria-label={`Clear capture time for ${f.relPath}`}
               >

@@ -51,14 +51,14 @@ export function DeploymentPicker({ locations, value, onChange, elevationUnit = '
   // Close on outside click.
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => {
+    const onDoc = (e: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false);
         setDetailKey(null);
       }
     };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    document.addEventListener('pointerdown', onDoc);
+    return () => document.removeEventListener('pointerdown', onDoc);
   }, [open]);
 
   function choose(loc: Location) {
@@ -140,8 +140,8 @@ export function DeploymentPicker({ locations, value, onChange, elevationUnit = '
       </button>
 
       {open && (
-        <div className="absolute z-10 mt-1 w-full border border-rule bg-panel shadow-lg">
-          <div className="p-2 border-b border-ruleSoft">
+        <div className="fixed inset-x-0 bottom-0 z-20 flex max-h-[70dvh] flex-col border border-rule bg-panel shadow-lg sm:absolute sm:inset-x-auto sm:bottom-auto sm:z-10 sm:mt-1 sm:block sm:max-h-none sm:w-full">
+          <div className="flex items-center gap-2 p-2 border-b border-ruleSoft sm:block">
             <input
               ref={inputRef}
               value={query}
@@ -151,12 +151,23 @@ export function DeploymentPicker({ locations, value, onChange, elevationUnit = '
               }}
               onKeyDown={onKeyDown}
               placeholder="Filter by name or id…"
-              className="w-full border border-rule bg-paper px-2.5 py-1.5 font-body text-[14px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
+              className="min-w-0 flex-1 sm:w-full sm:flex-none border border-rule bg-paper px-2.5 py-1.5 font-body text-[14px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
               autoComplete="off"
               spellCheck={false}
             />
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setDetailKey(null);
+              }}
+              aria-label="Close"
+              className="shrink-0 grid place-items-center min-w-11 min-h-11 border border-rule text-inkSoft text-[14px] sm:hidden"
+            >
+              ✕
+            </button>
           </div>
-          <ul role="listbox" className="max-h-[280px] overflow-auto">
+          <ul role="listbox" className="flex-1 min-h-0 overflow-auto sm:max-h-[280px] sm:flex-none">
             {matches.length === 0 && (
               <li className="px-3 py-2 font-body text-[13px] text-inkMute">No matching locations.</li>
             )}
@@ -186,7 +197,7 @@ export function DeploymentPicker({ locations, value, onChange, elevationUnit = '
                     }}
                     aria-expanded={detailKey === loc.key}
                     aria-label={`Details for ${loc.name}`}
-                    className="shrink-0 w-5 h-5 grid place-items-center border border-rule text-inkSoft hover:text-ink hover:border-ink text-[11px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                    className="shrink-0 min-w-11 min-h-11 sm:min-w-5 sm:min-h-5 grid place-items-center border border-rule text-inkSoft hover:text-ink hover:border-ink [@media(hover:none)]:text-ink [@media(hover:none)]:border-ink text-[11px] font-mono focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
                   >
                     i
                   </button>

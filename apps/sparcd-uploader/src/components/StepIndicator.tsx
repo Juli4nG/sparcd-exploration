@@ -10,7 +10,7 @@ const STEPS: { id: WizardStep; label: string }[] = [
 export function StepIndicator({ current }: { current: WizardStep }) {
   const currentIndex = STEPS.findIndex((s) => s.id === current);
   return (
-    <ol className="flex items-center gap-2 font-body" aria-label="Upload steps">
+    <ol className="flex flex-wrap items-center gap-2 font-body" aria-label="Upload steps">
       {STEPS.map((s, i) => {
         const done = i < currentIndex;
         const active = i === currentIndex;
@@ -28,7 +28,7 @@ export function StepIndicator({ current }: { current: WizardStep }) {
               <span className="font-mono text-[12px]">{done ? '✓' : i + 1}</span>
               {s.label}
             </span>
-            {i < STEPS.length - 1 && <span className="w-6 h-px bg-rule" aria-hidden />}
+            {i < STEPS.length - 1 && <span className="w-3 sm:w-6 h-px bg-rule" aria-hidden />}
           </li>
         );
       })}

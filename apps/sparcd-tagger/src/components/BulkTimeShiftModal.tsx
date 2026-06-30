@@ -54,14 +54,14 @@ export function BulkTimeShiftModal({
       aria-label="Time shift selection"
     >
       <div
-        className="w-full max-w-[680px] bg-paper border border-rule shadow-xl"
+        className="w-full max-w-[680px] max-h-[90dvh] overflow-y-auto bg-paper border border-rule shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-rule px-5 py-3">
           <h2 className="font-display text-[18px] font-[600] text-ink">Time shift · selection</h2>
           <button
             onClick={onClose}
-            className="w-7 h-7 grid place-items-center border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="w-11 h-11 grid place-items-center md:w-7 md:h-7 border border-rule text-inkSoft hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
             aria-label="Close"
           >
             ✕
@@ -107,12 +107,12 @@ export function BulkTimeShiftModal({
               </span>
             </div>
             {anchorTimestamp ? (
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-3">
                 <div>
                   <div className="text-[10px] font-[600] tracking-[0.12em] uppercase text-inkSoft mb-1">
                     Original
                   </div>
-                  <div className="font-mono text-[15px] text-inkSoft line-through decoration-rule">
+                  <div className="font-mono text-[15px] text-inkSoft line-through decoration-rule break-all">
                     {anchorTimestamp}
                   </div>
                 </div>
@@ -121,7 +121,7 @@ export function BulkTimeShiftModal({
                   <div className="text-[10px] font-[600] tracking-[0.12em] uppercase text-accent mb-1">
                     Corrected
                   </div>
-                  <div className="font-mono text-[15px] font-[600] text-ink">{corrected}</div>
+                  <div className="font-mono text-[15px] font-[600] text-ink break-all">{corrected}</div>
                 </div>
               </div>
             ) : (
