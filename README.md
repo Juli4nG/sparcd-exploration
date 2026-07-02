@@ -11,9 +11,11 @@ and move between them.
 ## The tools
 
 - **`apps/sparcd-explorer`** — a [marimo](https://marimo.io) notebook that
-  connects to the SPARC'd MinIO backend, bins camera locations into H3
-  hexagons, and serves an interactive species-richness report. Exports to a
-  static Pyodide bundle that runs entirely in the browser
+  signs in to the SPARC'd MinIO backend, loads a collection's Camtrap-DP
+  CSVs, and renders a Field Notebook view: a hex-binned map, a species
+  dashboard, stat cards, and drill-in tabs for images, detections, and
+  locations. Query filters apply on Search; display options tune presentation
+  live. Exports to a static Pyodide bundle that runs entirely in the browser
   (see [Static deploy](#static-deploy)).
 - **`apps/sparcd-uploader`** — a static, browser-based tool for preparing and
   uploading camera-trap image batches. Drop a folder; it scans JPEGs and runs

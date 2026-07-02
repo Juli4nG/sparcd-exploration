@@ -5,8 +5,8 @@
   "scripts": {
     "dev": "uv run marimo edit notebooks/hello.py --watch --no-token",
     "edit": "uv run marimo edit notebooks/hello.py --watch --no-token",
+    "start": "uv run marimo run notebooks/hello.py --no-token",
     "preview": "uv run marimo edit notebooks/sparcd_preview.py --watch --no-token",
-    "start": "uv run marimo run notebooks/sparcd_preview.py --no-token",
     "build": "echo \"marimo notebooks are source; no build step\" && exit 0",
     "check": "uv run python -m compileall -q notebooks",
     "lint": "uv run python -m compileall -q notebooks",

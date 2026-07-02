@@ -1,0 +1,266 @@
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* Field Notebook v2 — shared with sparcd-home / tagger / uploader.
+   Tokens drive every explorer surface; marimo's own chrome is remapped onto
+   the paper palette via the --marimo-* and --background overrides below. */
+:root {
+  --paper: #f4ecd8;
+  --paperHover: #efe6cc;
+  --panel: #fbf7eb;
+  --panelHover: #f5efe0;
+  --ink: #1c1a14;
+  --inkSoft: #4a463b;
+  --inkMute: #6b6555;
+  --rule: #8c8166;
+  --ruleSoft: #cfc4a8;
+  --accent: #0b3358;
+  --accentSoft: #dfe7ef;
+  --warn: #8a3818;
+  --ok: #33602e;
+  --mark: #ead8a3;
+
+  --marimo-heading-font: 'Newsreader', Georgia, serif;
+  --marimo-text-font: 'Inter Tight', Inter, system-ui, sans-serif;
+  --marimo-monospace-font: 'JetBrains Mono', ui-monospace, monospace;
+  --background: var(--paper);
+  --foreground: var(--ink);
+}
+
+.dark {
+  --paper: #211c15;
+  --paperHover: #2a241b;
+  --panel: #2a241b;
+  --panelHover: #332c20;
+  --ink: #f0e8d6;
+  --inkSoft: #c9bfa6;
+  --inkMute: #9a907a;
+  --rule: #6b6047;
+  --ruleSoft: #3d3528;
+  --accent: #7da7d9;
+  --accentSoft: #26303d;
+  --warn: #d98a5a;
+  --ok: #8fbf7f;
+  --mark: #5a4d2e;
+}
+
+/* ── Header band ─────────────────────────────────────────────────────── */
+.sparcd-header {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  padding: 0.2rem 0 0.85rem;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid var(--rule);
+}
+.sparcd-header img {
+  height: 40px;
+  width: auto;
+  flex-shrink: 0;
+}
+.sparcd-wordmark {
+  font-family: 'Newsreader', Georgia, serif;
+  font-weight: 600;
+  font-size: 1.7rem;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.sparcd-wordmark .dot {
+  color: var(--inkMute);
+}
+.sparcd-wordmark .tool {
+  color: var(--inkMute);
+  font-weight: 400;
+  font-style: italic;
+}
+.sparcd-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 1rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sparcd-nav a {
+  color: var(--inkMute);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 2px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.sparcd-nav a:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Connection chip ─────────────────────────────────────────────────── */
+.sparcd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+  color: var(--inkSoft);
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+}
+.sparcd-chip .led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
+}
+.sparcd-chip .host {
+  color: var(--ink);
+  font-weight: 500;
+}
+.sparcd-chip .src {
+  color: var(--inkMute);
+}
+
+/* ── Sidebar section labels ──────────────────────────────────────────── */
+.sparcd-side-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--inkMute);
+  margin: 0.2rem 0 0.1rem;
+}
+
+/* ── Panels / cards ──────────────────────────────────────────────────── */
+.sparcd-card {
+  border: 1px solid var(--ruleSoft);
+  background: var(--panel);
+  padding: 0.7rem 0.8rem;
+}
+.sparcd-card .title {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 0.45rem;
+}
+.sparcd-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--ruleSoft);
+  font-size: 0.85rem;
+}
+.sparcd-row .k {
+  color: var(--inkMute);
+}
+.sparcd-row .v {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.sparcd-note {
+  color: var(--inkMute);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  margin: 0.4rem 0;
+}
+
+/* Abundance bars */
+.sparcd-bar-track {
+  height: 7px;
+  background: var(--mark);
+  overflow: hidden;
+}
+.sparcd-bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+.sparcd-empty {
+  border: 1px dashed var(--rule);
+  background: var(--panel);
+  padding: 1.6rem 1.4rem;
+  text-align: center;
+}
+.sparcd-empty .glyph {
+  font-size: 1.8rem;
+  line-height: 1;
+  margin-bottom: 0.5rem;
+}
+.sparcd-empty .headline {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: 1.25rem;
+  color: var(--ink);
+  margin-bottom: 0.3rem;
+}
+.sparcd-empty .sub {
+  color: var(--inkMute);
+  font-size: 0.86rem;
+  line-height: 1.4;
+  max-width: 42ch;
+  margin: 0 auto;
+}
+
+/* ── Warn / error callout ────────────────────────────────────────────── */
+.sparcd-callout {
+  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  color: var(--ink);
+  padding: 0.7rem 0.85rem;
+  margin: 0.5rem 0;
+}
+.sparcd-callout .t {
+  font-weight: 700;
+  color: var(--warn);
+}
+.sparcd-callout .d {
+  font-size: 0.76rem;
+  color: var(--inkMute);
+  margin-top: 0.25rem;
+}
+
+/* ── Thumbnail grid ──────────────────────────────────────────────────── */
+.sparcd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 0.5rem;
+}
+.sparcd-grid figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sparcd-grid img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: var(--mark);
+  display: block;
+  border: 1px solid var(--ruleSoft);
+  transition: transform 0.15s ease;
+}
+.sparcd-grid a:hover img {
+  transform: scale(1.02);
+}
+.sparcd-grid figcaption {
+  font-size: 12px;
+  line-height: 1.3;
+}
+.sparcd-grid .fname {
+  font-weight: 600;
+  color: var(--ink);
+}
+.sparcd-grid .caption {
+  color: var(--inkMute);
+  word-break: break-word;
+}

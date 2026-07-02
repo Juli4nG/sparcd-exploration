@@ -13,17 +13,15 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # SPARC'd preview
+    mo.md("""
+    # SPARC'd preview
 
-        Connects to the SPARC'd MinIO/S3 backend (image collections, uploads)
-        and — if configured — a local copy of the SQLite app-state DB.
+    Connects to the SPARC'd MinIO/S3 backend (image collections, uploads)
+    and — if configured — a local copy of the SQLite app-state DB.
 
-        Credentials are read from `.env` (copy `.env.example`). You can also
-        override them per-session in the form below.
-        """
-    )
+    Credentials are read from `.env` (copy `.env.example`). You can also
+    override them per-session in the form below.
+    """)
     return
 
 
@@ -46,13 +44,13 @@ def _():
         return raw, default_secure
 
     default_secure = os.getenv("SPARCD_S3_SECURE", "true").lower() == "true"
-    ep, secure = normalize_endpoint(os.getenv("SPARCD_S3_ENDPOINT", ""), default_secure)
+    ep, env_secure = normalize_endpoint(os.getenv("SPARCD_S3_ENDPOINT", ""), default_secure)
 
     env = {
         "endpoint": ep,
         "access_key": os.getenv("SPARCD_S3_ACCESS_KEY", ""),
         "secret_key": os.getenv("SPARCD_S3_SECRET_KEY", ""),
-        "secure": secure,
+        "secure": env_secure,
         "bucket": os.getenv("SPARCD_S3_BUCKET", ""),
         "db_path": os.getenv("SPARCD_DB", ""),
     }
@@ -116,11 +114,11 @@ def _(client, mo):
 
     buckets_df = pl.DataFrame()
     if client is not None:
-        rows = [
+        bucket_rows = [
             {"name": b.name, "creation_date": b.creation_date}
             for b in client.list_buckets()
         ]
-        buckets_df = pl.DataFrame(rows) if rows else pl.DataFrame()
+        buckets_df = pl.DataFrame(bucket_rows) if bucket_rows else pl.DataFrame()
 
     mo.md("## Buckets")
     return buckets_df, pl
@@ -164,33 +162,35 @@ def _(client, pl, target_bucket):
         objects_df = pl.DataFrame(objects) if objects else pl.DataFrame()
 
     objects_df
-    return (objects_df,)
+    return
 
 
 @app.cell
-def _(db_path, mo):
-    mo.md("## SQLite tables")
+def _(mo):
+    mo.md("""
+    ## SQLite tables
+    """)
     return
 
 
 @app.cell
 def _(db_path, pl):
     import sqlite3
-    from pathlib import Path
+    from pathlib import Path as SQLitePath
 
     tables_df = pl.DataFrame()
     conn = None
-    if db_path.value and Path(db_path.value).exists():
+    if db_path.value and SQLitePath(db_path.value).exists():
         conn = sqlite3.connect(db_path.value)
-        cur = conn.execute(
+        tables_cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
-        table_names = [r[0] for r in cur.fetchall()]
-        rows = []
+        table_names = [r[0] for r in tables_cur.fetchall()]
+        table_rows = []
         for name in table_names:
             count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
-            rows.append({"table": name, "rows": count})
-        tables_df = pl.DataFrame(rows) if rows else pl.DataFrame()
+            table_rows.append({"table": name, "rows": count})
+        tables_df = pl.DataFrame(table_rows) if table_rows else pl.DataFrame()
 
     tables_df
     return (conn,)
@@ -200,10 +200,10 @@ def _(db_path, pl):
 def _(conn, mo, pl):
     preview_df = pl.DataFrame()
     if conn is not None:
-        cur = conn.execute(
+        preview_cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name LIMIT 1"
         )
-        row = cur.fetchone()
+        row = preview_cur.fetchone()
         if row is not None:
             first = row[0]
             preview_df = pl.read_database(
