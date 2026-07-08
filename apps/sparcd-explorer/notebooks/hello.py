@@ -517,9 +517,10 @@ def _(
 
         client = Minio(_ep, access_key=_creds["access"], secret_key=_creds["secret"], secure=_secure)
         _src = "form" if _form_value is not None else ".env"
+        from html import escape as _esc_ep
         _connection_chip = mo.Html(
             "<div class='sparcd-chip'><span class='led'></span>"
-            f"<span>Connected to <span class='host'>{_ep}</span></span>"
+            f"<span>Connected to <span class='host'>{_esc_ep(_ep)}</span></span>"
             f"<span class='src'>· {'https' if _secure else 'http'} · from {_src}</span></div>"
         )
     _connection_chip
@@ -1771,8 +1772,10 @@ def _(locations, mo, pl, selected_location_ids):
             "</div>"
         )
     else:
+        from html import escape as _esc
+
         _rows = locations.filter(pl.col("location_id").is_in(selected_location_ids))
-        _names = ", ".join(_rows["location_name"].to_list())
+        _names = ", ".join(_esc(n) for n in _rows["location_name"].to_list())
         _img = int(_rows["image_count"].sum())
         _tag = int(_rows["tagged_image_count"].sum())
         selection_report = mo.Html(
