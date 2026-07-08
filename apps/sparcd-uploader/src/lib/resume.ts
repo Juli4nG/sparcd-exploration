@@ -24,6 +24,9 @@ import { processBatch } from './processPool';
 export type RestoreOk = {
   ok: true;
   attached: Map<string, File>; // localPath → reattached source file
+  // Files whose recorded size/hash no longer match on disk — surfaced (never
+  // attached) exactly as the reselect path does.
+  problems: ReconcileProblem[];
   // A fresh durable handle obtained during a reselect, so the session can be
   // upgraded to `persistent-handle` for next time.
   newHandle?: FileSystemDirectoryHandle;
@@ -35,11 +38,17 @@ export type RestoreResult = RestoreOk | RestoreFailed;
 export type ReconcileProblem = { localPath: string; fileName: string; reason: string };
 
 /**
- * Revalidate the stored directory handle's read permission and walk it, keying
- * the reattached files by their bundle-relative path. Trusts the handle's
- * identity — it is the same folder the bytes came from — so it does not re-hash.
+ * Revalidate the stored directory handle's read permission, walk it, and
+ * reconcile the reattached files against the persisted records — re-hashing
+ * every recorded file. The handle identifies the same folder, but a same-size
+ * in-place edit between sessions would otherwise upload the wrong bytes past the
+ * app's own recorded-hash verification, so we compare content just like the
+ * reselect path and exclude any mismatch from the attach map.
  */
-export async function restoreFromHandle(batch: BatchRecord): Promise<RestoreResult> {
+export async function restoreFromHandle(
+  batch: BatchRecord,
+  records: FileRecord[],
+): Promise<RestoreResult> {
   const handle = batch.dirHandle;
   if (!handle) return { ok: false, reason: 'No durable folder handle is stored for this session.' };
 
@@ -52,7 +61,8 @@ export async function restoreFromHandle(batch: BatchRecord): Promise<RestoreResu
   }
 
   const scanned = await scanDirectoryHandle(handle);
-  return { ok: true, attached: new Map(scanned.map((f) => [f.relPath, f.file])) };
+  const { attached, problems } = await reconcileReselect(records, scanned);
+  return { ok: true, attached, problems };
 }
 
 // Hash a set of files through the existing worker pool, returning relPath → digest.

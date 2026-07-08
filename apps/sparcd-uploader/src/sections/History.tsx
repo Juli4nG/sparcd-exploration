@@ -121,14 +121,14 @@ export function History() {
         setMessage('Connect to a storage endpoint before resuming.');
         return;
       }
-      // Durable handle: revalidate permission inside this click gesture. The
-      // handle is the same folder the bytes came from, so we trust its identity
-      // and skip re-hashing; any file the orchestrator can't find is marked
-      // failed there.
+      // Durable handle: revalidate permission inside this click gesture, then
+      // re-hash against the recorded files — a same-size in-place edit between
+      // sessions would otherwise slip through, so mismatches surface as problems.
       if (batch.fileAccessMode === 'persistent-handle' && batch.dirHandle) {
-        const restore = await restoreFromHandle(batch);
+        const session = await loadSession(batch.id);
+        const restore = await restoreFromHandle(batch, session?.files ?? []);
         if (restore.ok) {
-          await launch(batch, restore.attached, []);
+          await launch(batch, restore.attached, restore.problems);
           return;
         }
         setMessage(restore.reason);
