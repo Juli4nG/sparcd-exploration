@@ -636,7 +636,6 @@ def _(DEFAULT_COLLECTION_BUCKETS, collection_load_form):
     # is submitted, so the app loads a collection on first render.
     _submitted = collection_load_form.value
     BUCKETS = list((_submitted or {}).get("collections") or DEFAULT_COLLECTION_BUCKETS)
-    COLLECTION_UUIDS = [b.removeprefix("sparcd-") for b in BUCKETS]
     UPLOADS_PREFIXES = [
         (b, f"Collections/{b.removeprefix('sparcd-')}/Uploads/")
         for b in BUCKETS
@@ -1050,7 +1049,11 @@ def _(SEARCH_DEFAULTS, deployments, media, observations, pl, search_form):
         pl.col("media_path").is_in(_kept_paths)
         | ~pl.col("media_path").is_in(_dated_obs_paths)
     )
-    query_deployment_ids = observations_filtered["deployment_id"].unique().to_list()
+    # Derive from media_filtered so never-tagged deployments (media but zero
+    # observations) stay visible on the map and in the stat cards; sites whose
+    # observations all fail the species/date filters still drop out unless they
+    # also have untagged frames preserved by the C.2 filter above.
+    query_deployment_ids = media_filtered["deployment_id"].unique().to_list()
     applied_filters = {
         "include": sorted(_included),
         "exclude": sorted(_excluded),

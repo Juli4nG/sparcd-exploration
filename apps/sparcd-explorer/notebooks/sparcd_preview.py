@@ -188,7 +188,7 @@ def _(db_path, pl):
         table_names = [r[0] for r in tables_cur.fetchall()]
         table_rows = []
         for name in table_names:
-            count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+            count = conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
             table_rows.append({"table": name, "rows": count})
         tables_df = pl.DataFrame(table_rows) if table_rows else pl.DataFrame()
 
@@ -207,7 +207,7 @@ def _(conn, mo, pl):
         if row is not None:
             first = row[0]
             preview_df = pl.read_database(
-                query=f"SELECT * FROM {first} LIMIT 25",
+                query=f'SELECT * FROM "{first}" LIMIT 25',
                 connection=conn,
             )
             mo.md(f"_Preview of `{first}` (first 25 rows):_")
