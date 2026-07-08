@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            printf '# /// script\n# requires-python = ">=3.11"\n# dependencies = ["marimo","minio","python-dotenv","polars","plotly","h3"]\n# ///\n\n'
+            printf '# /// script\n# requires-python = ">=3.11"\n# dependencies = ["marimo","minio","python-dotenv","polars","plotly"]\n# ///\n\n'
             cat notebooks/hello.py
           } > notebooks/hello_wasm.py
 
