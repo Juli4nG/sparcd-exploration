@@ -117,31 +117,40 @@ export async function buildBundle(input: BuildInput): Promise<BundlePreview> {
     return src ? naiveInZoneToUtcNaive(src, timeZone) : '';
   };
 
-  const media: Media[] = ready.map((f) => {
+  // Resolve each file's derived values once (capture-time tz conversion is not
+  // free), then project them into both media rows and upload items.
+  const resolved = ready.map((f) => {
     const objectName = names.get(f.id)!;
-    const mediaPath = `${uploadPath}/${objectName}`;
     return {
-      mediaId: mediaPath,
-      deploymentId: deployment.deploymentId,
-      mediaPath,
-      fileName: f.fileName,
-      timestamp: captureFor(f),
+      f,
+      objectName,
+      mediaPath: `${uploadPath}/${objectName}`,
+      capture: captureFor(f),
       mimeType: mimeFor(f),
     };
   });
 
-  const uploadItems: UploadItem[] = ready.map((f, i) => ({
-    id: f.id,
-    localPath: f.relPath,
-    fileName: f.fileName,
-    objectName: names.get(f.id)!,
-    key: media[i].mediaPath,
-    file: f.file,
-    size: f.size,
-    sha256: f.sha256!,
-    captureTimestamp: captureFor(f) || undefined,
-    mediaKind: f.mediaKind,
-    mimeType: mimeFor(f),
+  const media: Media[] = resolved.map((r) => ({
+    mediaId: r.mediaPath,
+    deploymentId: deployment.deploymentId,
+    mediaPath: r.mediaPath,
+    fileName: r.f.fileName,
+    timestamp: r.capture,
+    mimeType: r.mimeType,
+  }));
+
+  const uploadItems: UploadItem[] = resolved.map((r) => ({
+    id: r.f.id,
+    localPath: r.f.relPath,
+    fileName: r.f.fileName,
+    objectName: r.objectName,
+    key: r.mediaPath,
+    file: r.f.file,
+    size: r.f.size,
+    sha256: r.f.sha256!,
+    captureTimestamp: r.capture || undefined,
+    mediaKind: r.f.mediaKind,
+    mimeType: r.mimeType,
   }));
 
   const deploymentsCsv = serializeDeployments([deployment]);
