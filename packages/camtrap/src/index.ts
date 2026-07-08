@@ -662,10 +662,13 @@ export function applyUploadMetaEdit(
   meta: UploadMetaJson,
   input: { delta: SpeciesDelta; user: string; editStamp: string },
 ): UploadMetaJson {
+  // Older/foreign UploadMeta.json (Java, pre-editComments) may omit the field;
+  // parseUploadMeta is a bare cast, so default it before spreading.
+  const prior = Array.isArray(meta.editComments) ? meta.editComments : [];
   return {
     ...meta,
     imagesWithSpecies: meta.imagesWithSpecies - input.delta.detagged + input.delta.retagged,
-    editComments: [...meta.editComments, `Edited by ${input.user} on ${input.editStamp}`],
+    editComments: [...prior, `Edited by ${input.user} on ${input.editStamp}`],
   };
 }
 

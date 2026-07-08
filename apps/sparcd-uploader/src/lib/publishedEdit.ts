@@ -79,10 +79,13 @@ export function buildDescriptionEdit(
   opts: { description: string; user: string; editStamp: string },
 ): string {
   const meta = parseUploadMeta(metaText);
+  // Older/foreign UploadMeta.json (Java, pre-editComments) may omit the field;
+  // parseUploadMeta is a bare cast, so default it before spreading.
+  const prior = Array.isArray(meta.editComments) ? meta.editComments : [];
   return serializeUploadMeta({
     ...meta,
     description: opts.description,
-    editComments: [...meta.editComments, `Edited by ${opts.user} on ${opts.editStamp}`],
+    editComments: [...prior, `Edited by ${opts.user} on ${opts.editStamp}`],
   });
 }
 
