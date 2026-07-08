@@ -14,6 +14,7 @@ import {
   fileStateCounts,
   updateBatch,
   type BatchRecord,
+  type LoadedSession,
   type PersistedFileState,
 } from '../lib/db';
 import {
@@ -75,12 +76,12 @@ export function History() {
   const running = snap?.phase === 'blobs' || snap?.phase === 'metadata';
 
   const launch = useCallback(
-    async (batch: BatchRecord, attached: Map<string, File>, probs: ReconcileProblem[]) => {
-      const session = await loadSession(batch.id);
-      if (!session) {
-        setMessage('Session record is missing.');
-        return;
-      }
+    async (
+      batch: BatchRecord,
+      session: LoadedSession,
+      attached: Map<string, File>,
+      probs: ReconcileProblem[],
+    ) => {
       const missingRequired = session.files.filter((f) => f.state !== 'done' && !attached.has(f.localPath));
       if (missingRequired.length > 0) {
         setProblems([
@@ -121,14 +122,18 @@ export function History() {
         setMessage('Connect to a storage endpoint before resuming.');
         return;
       }
+      const session = await loadSession(batch.id);
+      if (!session) {
+        setMessage('Session record is missing.');
+        return;
+      }
       // Durable handle: revalidate permission inside this click gesture, then
       // re-hash against the recorded files — a same-size in-place edit between
       // sessions would otherwise slip through, so mismatches surface as problems.
       if (batch.fileAccessMode === 'persistent-handle' && batch.dirHandle) {
-        const session = await loadSession(batch.id);
-        const restore = await restoreFromHandle(batch, session?.files ?? []);
+        const restore = await restoreFromHandle(batch, session.files);
         if (restore.ok) {
-          await launch(batch, restore.attached, restore.problems);
+          await launch(batch, session, restore.attached, restore.problems);
           return;
         }
         setMessage(restore.reason);
@@ -139,13 +144,12 @@ export function History() {
       if (supportsDirectoryHandle) {
         const picked = await reselectFolder();
         if (!picked) return; // user dismissed
-        const session = await loadSession(batch.id);
-        const { attached, problems: probs } = await reconcileReselect(session?.files ?? [], picked.scanned);
+        const { attached, problems: probs } = await reconcileReselect(session.files, picked.scanned);
         // Opportunistically upgrade the session to a durable handle for next time.
         if (picked.handle) {
           await updateBatch(batch.id, { dirHandle: picked.handle, fileAccessMode: 'persistent-handle' });
         }
-        await launch(batch, attached, probs);
+        await launch(batch, session, attached, probs);
       } else {
         // No durable picker — fall back to a transient <input webkitdirectory>.
         pendingReselect.current = batch;
@@ -161,8 +165,12 @@ export function History() {
       pendingReselect.current = null;
       if (!batch || !list || list.length === 0) return;
       const session = await loadSession(batch.id);
-      const { attached, problems: probs } = await reconcileReselect(session?.files ?? [], scanFileList(list));
-      await launch(batch, attached, probs);
+      if (!session) {
+        setMessage('Session record is missing.');
+        return;
+      }
+      const { attached, problems: probs } = await reconcileReselect(session.files, scanFileList(list));
+      await launch(batch, session, attached, probs);
     },
     [launch],
   );
