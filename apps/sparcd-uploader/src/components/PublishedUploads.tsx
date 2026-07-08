@@ -211,7 +211,7 @@ function UploadCard({
           <button
             onClick={() => {
               setMode('description');
-              setDescription(upload.meta.description);
+              setDescription(upload.meta.description ?? '');
               setNote(null);
             }}
             className="border border-ink text-ink min-h-[44px] px-4 py-1 sm:min-h-0 sm:px-3 text-[13px] font-body hover:bg-paperHover"
