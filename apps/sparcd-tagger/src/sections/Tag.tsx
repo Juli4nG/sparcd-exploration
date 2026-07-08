@@ -385,7 +385,7 @@ export function Tag() {
     filter,
     view,
     setView,
-    isModalOpen: () => modalOpenRef.current,
+    isModalOpen: () => modalOpenRef.current || showSync || showSnapshots || showTimeShift,
   };
 
   useEffect(() => {
@@ -1200,7 +1200,7 @@ type HandlerState = {
   filter: string;
   view: View;
   setView: (v: View) => void;
-  isModalOpen: () => boolean; // a read-only overlay (e.g. the species loupe) owns the keys
+  isModalOpen: () => boolean; // an overlay (loupe, or the Sync/Snapshots/Time-shift dialogs) owns the keys
 };
 
 function isTypingTarget(t: EventTarget | null): boolean {
@@ -1234,9 +1234,10 @@ function gotoBurst(s: HandlerState, dir: 1 | -1): void {
 }
 
 function handleKey(e: KeyboardEvent, s: HandlerState): void {
-  // A read-only overlay (the species loupe) owns the keyboard while open — it
-  // closes itself on Escape via its own capture-phase listener; suppress all
-  // tagger hotkeys so nothing is tagged behind the modal.
+  // An overlay owns the keyboard while open — the species loupe, or the
+  // Sync/Snapshots/Time-shift dialogs. Suppress all tagger hotkeys so nothing
+  // is tagged or navigated behind the modal; a keystroke landing on a frame
+  // mid-sync would create a draft edit the sync then silently clears.
   if (s.isModalOpen()) return;
 
   // Cheatsheet modal swallows everything but its own toggle / dismiss.
