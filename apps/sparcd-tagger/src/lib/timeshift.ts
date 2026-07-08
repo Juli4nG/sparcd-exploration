@@ -71,5 +71,10 @@ export function normalizeTimestampInput(raw: string): string | null {
   if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 59) {
     return null;
   }
+  // Reject impossible calendar days (Feb 30, Apr 31, Feb 29 in a non-leap year):
+  // a real day round-trips through Date unchanged, while an overflow rolls the
+  // date into the following month.
+  const probe = new Date(Date.UTC(Number(y), month - 1, day));
+  if (probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) return null;
   return `${y}-${mo}-${d}T${h}:${mi}:${String(sec).padStart(2, '0')}`;
 }
