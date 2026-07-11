@@ -53,6 +53,13 @@ describe('normalizeTimestampInput', () => {
     expect(normalizeTimestampInput('2024-01-11 25:00:00')).toBeNull(); // hour 25
     expect(normalizeTimestampInput('2024-01-11')).toBeNull(); // no time
   });
+
+  it('rejects impossible calendar days but accepts a real leap day', () => {
+    expect(normalizeTimestampInput('2024-02-30 00:00:00')).toBeNull(); // Feb 30 never exists
+    expect(normalizeTimestampInput('2024-04-31 00:00:00')).toBeNull(); // April has 30 days
+    expect(normalizeTimestampInput('2023-02-29 00:00:00')).toBeNull(); // 2023 is not a leap year
+    expect(normalizeTimestampInput('2024-02-29 06:42:18')).toBe('2024-02-29T06:42:18'); // leap year
+  });
 });
 
 describe('earliestCorrected', () => {

@@ -127,7 +127,6 @@ type DraftState = {
   ) => void;
   /** Detag = clear ALL species on one focused image OR every target in a selection. */
   detag: (ctx: UploadCtx, targets: TagTarget[]) => void;
-  toggleQuestionable: (ctx: UploadCtx, mediaPath: string, deploymentId: string) => void;
 
   /** Set (or clear with null) the upload-level offset applied to every image.
    *  Persists to the `uploads` record so the next sync writes corrected times. */
@@ -273,11 +272,6 @@ export const useDraftStore = create<DraftState>((set, get) => {
       })),
 
     detag: (ctx, targets) => mutateMany(ctx, targets, { observations: [] }),
-
-    toggleQuestionable: (ctx, mediaPath, deploymentId) => {
-      const prev = get().drafts[mediaPath];
-      mutateMany(ctx, [{ mediaPath, deploymentId }], { questionable: !prev?.questionable });
-    },
 
     setTimeOffset: (ctx, offset) => {
       // Optimistic Zustand update (hot path) + durable Dexie mirror. Unlike a

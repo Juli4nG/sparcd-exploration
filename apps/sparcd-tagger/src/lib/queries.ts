@@ -25,8 +25,10 @@ import {
   getUpload,
   hasDirtyDraftsForUpload,
   uploadDraftStates,
+  uploadId,
   type UploadDraftState,
 } from './db';
+import { useDraftStore, dirtyCount } from './drafts';
 
 export function useCollections(cfg: S3Config | null, connectionId: number) {
   return useQuery<CollectionRef[]>({
@@ -129,7 +131,17 @@ export function useTagImages(
       // surfaces as a conflict at sync. Post-sync/restore re-grounding is
       // explicit (in syncRunner) and bypasses this.
       const existing = await getUpload(bucket, uploadPrefix!);
-      if (!existing?.mediaETag || !(await hasDirtyDraftsForUpload(bucket, uploadPrefix!))) {
+      // Draft writes are debounced, so Dexie can lag a live edit by up to the
+      // debounce window. Consult the in-memory store synchronously too — an
+      // optimistic edit already flips its record dirty there — so a refetch that
+      // resolves inside that window can't re-ground the base under active edits.
+      const store = useDraftStore.getState();
+      const memDirty =
+        store.loadedKey === uploadId(bucket, uploadPrefix!) && dirtyCount(store.drafts) > 0;
+      if (
+        !existing?.mediaETag ||
+        (!memDirty && !(await hasDirtyDraftsForUpload(bucket, uploadPrefix!)))
+      ) {
         await groundUpload(bucket, uploadPrefix!, state);
       }
       return buildTagImages({

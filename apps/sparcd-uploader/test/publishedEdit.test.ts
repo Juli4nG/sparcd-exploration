@@ -177,6 +177,20 @@ describe('buildDescriptionEdit', () => {
     // Key order is preserved → serialized bytes stay aligned (insertion order).
     expect(Object.keys(meta)).toEqual(Object.keys(before));
   });
+
+  it('tolerates foreign metadata that omits editComments (older SPARC’d / Java)', () => {
+    const { editComments, ...noEditComments } = parseUploadMeta(metaText);
+    void editComments;
+    const foreignText = JSON.stringify(noEditComments);
+    const next = buildDescriptionEdit(foreignText, {
+      description: 'corrected description',
+      user: USER,
+      editStamp: '2026.06.17.12.00.00',
+    });
+    const meta = parseUploadMeta(next);
+    expect(meta.description).toBe('corrected description');
+    expect(meta.editComments).toEqual([`Edited by ${USER} on 2026.06.17.12.00.00`]);
+  });
 });
 
 describe('restampDeployment scope', () => {
