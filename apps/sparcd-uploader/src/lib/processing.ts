@@ -9,28 +9,25 @@ import { useStore } from '../store';
 
 let run: ProcessRun | null = null;
 let runningToken = -1;
+let flushTimer: number | null = null;
+let startedBuffer: string[] = [];
+let resultBuffer: ProcessResponse[] = [];
 
-export function ensureProcessing(): void {
-  const { batchToken, files } = useStore.getState();
-  if (runningToken === batchToken) return;
+function clearFlushTimer(): void {
+  if (flushTimer !== null) window.clearInterval(flushTimer);
+  flushTimer = null;
+}
 
-  run?.cancel();
-  runningToken = batchToken;
+function clearBuffers(): void {
+  startedBuffer = [];
+  resultBuffer = [];
+}
 
-  const queued = files.filter((f) => f.processState === 'queued');
-  if (queued.length === 0) {
-    run = null;
-    return;
-  }
-
-  const { markProcessing, applyResult, setProcessing } = useStore.getState();
-  setProcessing(true);
-
+function kickVideoPosters(results: ProcessResponse[]): void {
   // Videos can't be decoded in the worker; grab a poster frame on the main
   // thread once the worker reports a video ready. Best-effort — a failure just
   // leaves the typed placeholder tile in the file list.
-  const onResult = (r: ProcessResponse): void => {
-    applyResult(r);
+  for (const r of results) {
     if (!r.error && r.mediaKind === 'video' && !r.thumbnail) {
       const entry = useStore.getState().files.find((f) => f.id === r.id);
       if (entry) {
@@ -39,15 +36,59 @@ export function ensureProcessing(): void {
         });
       }
     }
-  };
+  }
+}
+
+function flush(token: number): void {
+  if (startedBuffer.length === 0 && resultBuffer.length === 0) return;
+
+  const started = startedBuffer;
+  const results = resultBuffer;
+  clearBuffers();
+
+  // A stale token means the batch was reset and no new run replaced this timer
+  // (a new run clears it in ensureProcessing) — stop it instead of ticking forever.
+  if (useStore.getState().batchToken !== token) {
+    clearFlushTimer();
+    return;
+  }
+
+  useStore.getState().applyProgress(started, results);
+  kickVideoPosters(results);
+}
+
+export function ensureProcessing(): void {
+  const { batchToken, files } = useStore.getState();
+  if (runningToken === batchToken) return;
+
+  run?.cancel();
+  clearFlushTimer();
+  clearBuffers();
+  runningToken = batchToken;
+
+  const queued = files.filter((f) => f.processState === 'queued');
+  if (queued.length === 0) {
+    run = null;
+    useStore.getState().setProcessing(false);
+    return;
+  }
+
+  const { setProcessing } = useStore.getState();
+  setProcessing(true);
+  flushTimer = window.setInterval(() => flush(batchToken), 200);
 
   run = processBatch(
     queued.map((f) => ({ id: f.id, file: f.file, fileKind: f.mediaKind })),
-    markProcessing,
-    onResult,
+    (id) => startedBuffer.push(id),
+    (r) => resultBuffer.push(r),
   );
   run.done.then(() => {
-    // Only clear if this is still the active run (a newer batch may have taken over).
-    if (runningToken === batchToken) useStore.getState().setProcessing(false);
+    // Only drain if this is still the active run (a newer batch may have taken over).
+    if (useStore.getState().batchToken === batchToken) {
+      clearFlushTimer();
+      flush(batchToken);
+      useStore.getState().revalidate();
+      useStore.getState().setProcessing(false);
+    }
   });
 }

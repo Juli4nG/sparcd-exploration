@@ -1,7 +1,7 @@
-// Per-file validation for the inspect step. Pure: takes the processed batch and
+// Per-file validation for the inspect step. Pure: takes processed files and
 // returns one verdict per file id. Severity drives the gate — `error` blocks the
 // batch, `warning` is allowed once surfaced, `ok` is clean. Duplicate detection
-// is cross-file (SHA-256), so this runs over the whole batch at once.
+// is cross-file (SHA-256), so the batch pass supplies duplicate counts.
 
 import type { FileEntry } from '../store';
 import { sanitizeRelPath } from './normalize';
@@ -16,6 +16,45 @@ export type FileValidation = {
 // Soft warning ceiling — unusual for a camera-trap JPEG, but allowed.
 const SOFT_SIZE_LIMIT = 100 * 1024 * 1024; // 100 MiB
 
+export function validateFile(f: FileEntry, dupCount = 0): FileValidation {
+  const issues: FileValidation['issues'] = [];
+
+  if (f.processState === 'error') {
+    issues.push({ severity: 'error', message: f.processError ?? 'Processing failed' });
+  }
+
+  // Object-key safety. The scan guarantees an accepted media type, so the only
+  // name failure mode here is an unsafe relative path.
+  const nameResult = sanitizeRelPath(f.relPath);
+  if (!nameResult.ok) {
+    issues.push({ severity: 'error', message: `Unsafe filename — ${nameResult.reason}` });
+  }
+
+  // A capture time is required. EXIF (images) or MP4 container metadata
+  // (videos) supplies it; absence is a soft warning here so inspect doesn't
+  // hard-block — the file is resolved by entering a time in Assign (a manual
+  // time satisfies the check). The hard gate is `captureTimeComplete`, applied
+  // at the Assign→upload boundary.
+  if (f.processState === 'ready' && !f.exifNaive && !f.manualNaive) {
+    issues.push({ severity: 'warning', message: 'No capture time — set one in Assign' });
+  }
+
+  if (f.size > SOFT_SIZE_LIMIT) {
+    issues.push({ severity: 'warning', message: 'Large file (>100 MiB) — unusual for camera-trap' });
+  }
+
+  if (f.sha256 && dupCount > 1) {
+    issues.push({ severity: 'warning', message: 'Duplicate of another file in this batch' });
+  }
+
+  const severity: Severity = issues.some((i) => i.severity === 'error')
+    ? 'error'
+    : issues.some((i) => i.severity === 'warning')
+      ? 'warning'
+      : 'ok';
+  return { severity, issues };
+}
+
 export function validateBatch(files: FileEntry[]): Record<string, FileValidation> {
   // Count content hashes so a hash seen more than once flags every copy.
   const hashCounts = new Map<string, number>();
@@ -25,42 +64,7 @@ export function validateBatch(files: FileEntry[]): Record<string, FileValidation
 
   const out: Record<string, FileValidation> = {};
   for (const f of files) {
-    const issues: FileValidation['issues'] = [];
-
-    if (f.processState === 'error') {
-      issues.push({ severity: 'error', message: f.processError ?? 'Processing failed' });
-    }
-
-    // Object-key safety. The scan guarantees an accepted media type, so the only
-    // name failure mode here is an unsafe relative path.
-    const nameResult = sanitizeRelPath(f.relPath);
-    if (!nameResult.ok) {
-      issues.push({ severity: 'error', message: `Unsafe filename — ${nameResult.reason}` });
-    }
-
-    // A capture time is required. EXIF (images) or MP4 container metadata
-    // (videos) supplies it; absence is a soft warning here so inspect doesn't
-    // hard-block — the file is resolved by entering a time in Assign (a manual
-    // time satisfies the check). The hard gate is `captureTimeComplete`, applied
-    // at the Assign→upload boundary.
-    if (f.processState === 'ready' && !f.exifNaive && !f.manualNaive) {
-      issues.push({ severity: 'warning', message: 'No capture time — set one in Assign' });
-    }
-
-    if (f.size > SOFT_SIZE_LIMIT) {
-      issues.push({ severity: 'warning', message: 'Large file (>100 MiB) — unusual for camera-trap' });
-    }
-
-    if (f.sha256 && (hashCounts.get(f.sha256) ?? 0) > 1) {
-      issues.push({ severity: 'warning', message: 'Duplicate of another file in this batch' });
-    }
-
-    const severity: Severity = issues.some((i) => i.severity === 'error')
-      ? 'error'
-      : issues.some((i) => i.severity === 'warning')
-        ? 'warning'
-        : 'ok';
-    out[f.id] = { severity, issues };
+    out[f.id] = validateFile(f, hashCounts.get(f.sha256 ?? '') ?? 0);
   }
   return out;
 }

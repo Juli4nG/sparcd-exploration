@@ -10,7 +10,7 @@ import {
 import type { ScannedFile } from './lib/scanFiles';
 import type { ProcessResponse } from './lib/processPool';
 import type { FileAccessMode } from './lib/db';
-import { validateBatch, type FileValidation } from './lib/validation';
+import { validateBatch, validateFile, type FileValidation } from './lib/validation';
 import { clearClientCache } from './lib/s3';
 import { localTimeZone, type NaiveDateTime } from './lib/exifTime';
 import type { ElevationUnit } from './lib/coords';
@@ -69,8 +69,8 @@ type UploaderState = {
   setScanning: (scanning: boolean) => void;
   setProcessing: (processing: boolean) => void;
   setFiles: (files: ScannedFile[], dirHandle?: FileSystemDirectoryHandle | null) => void;
-  markProcessing: (id: string) => void;
-  applyResult: (result: ProcessResponse) => void;
+  applyProgress: (started: string[], results: ProcessResponse[]) => void;
+  revalidate: () => void;
   setThumbnail: (id: string, thumbnail: Blob) => void;
   removeFile: (id: string) => void;
   setManualNaive: (id: string, naive: NaiveDateTime | null) => void;
@@ -172,32 +172,44 @@ export const useStore = create<UploaderState>()(
         }));
       },
 
-      markProcessing: (id) =>
-        set((s) => ({
-          files: s.files.map((f) => (f.id === id ? { ...f, processState: 'processing' } : f)),
-        })),
-
-      applyResult: (result) =>
+      applyProgress: (started, results) => {
+        if (started.length === 0 && results.length === 0) return;
+        const startedIds = new Set(started);
+        const resultsById = new Map(results.map((result) => [result.id, result]));
         set((s) => {
+          const validationUpdates: Record<string, FileValidation> = {};
           const files = s.files.map((f) => {
-            if (f.id !== result.id) return f;
+            const result = resultsById.get(f.id);
+            if (!result) {
+              return startedIds.has(f.id) && f.processState === 'queued'
+                ? { ...f, processState: 'processing' as const }
+                : f;
+            }
+
+            let next: FileEntry;
             if (result.error)
-              return { ...f, processState: 'error' as const, processError: result.error };
-            return {
-              ...f,
-              processState: 'ready' as const,
-              sha256: result.sha256,
-              exifNaive: result.exifNaive,
-              exifCamera: result.exifCamera,
-              gps: result.gps,
-              width: result.width,
-              height: result.height,
-              thumbnail: result.thumbnail,
-              mimeType: result.mimeType,
-            };
+              next = { ...f, processState: 'error' as const, processError: result.error };
+            else
+              next = {
+                ...f,
+                processState: 'ready' as const,
+                sha256: result.sha256,
+                exifNaive: result.exifNaive,
+                exifCamera: result.exifCamera,
+                gps: result.gps,
+                width: result.width,
+                height: result.height,
+                thumbnail: result.thumbnail,
+                mimeType: result.mimeType,
+              };
+            validationUpdates[f.id] = validateFile(next);
+            return next;
           });
-          return { files, validations: validateBatch(files) };
-        }),
+          return { files, validations: { ...s.validations, ...validationUpdates } };
+        });
+      },
+
+      revalidate: () => set((s) => ({ validations: validateBatch(s.files) })),
 
       // Attach a best-effort poster after the fact (video frames are captured on
       // the main thread, post-worker). No validation re-run: a poster never
