@@ -50,7 +50,7 @@ import {
   type LoadedSession,
 } from './db';
 
-export type UploadPhase = 'idle' | 'blobs' | 'metadata' | 'done' | 'error';
+export type UploadPhase = 'idle' | 'blobs' | 'metadata' | 'partial' | 'done' | 'error';
 export type FileState = 'pending' | 'uploading' | 'verifying' | 'done' | 'skipped' | 'failed';
 
 export type FileProgress = {
@@ -67,6 +67,7 @@ export type LogLine = { kind: 'put' | 'info' | 'warn' | 'error'; text: string };
 
 export type UploadSnapshot = {
   version: number; // bumped each emit so React re-renders the live arrays
+  sessionId: string;
   phase: UploadPhase;
   dryRun: boolean;
   files: FileProgress[];
@@ -102,6 +103,8 @@ export type UploadRun = { cancel: () => void; done: Promise<void> };
 const METADATA_RETRY = 1; // re-stamp attempts after the first
 const MAX_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 500;
+// Ten independent blob failures usually means credentials, CORS, or endpoint policy, not bad files.
+const MAX_FILE_FAILURES = 10;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -123,6 +126,12 @@ function isTransient(err: unknown): boolean {
   if (status === undefined) return true; // network/CORS/DNS — worth a retry
   if (status >= 500 || status === 429) return true;
   return false;
+}
+
+function isRunFatalBlobError(err: unknown): boolean {
+  if (err instanceof PreconditionFailedError) return true;
+  const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+  return status === 403 || status === 501;
 }
 
 // Full jitter: random in [0, base * 2^attempt].
@@ -234,6 +243,7 @@ function makeRunner(
 
   const snap: UploadSnapshot = {
     version: 0,
+    sessionId: '',
     phase: 'idle',
     dryRun,
     files: [],
@@ -361,6 +371,7 @@ function makeRunner(
   // re-stamp; resumes skip).
   const runOnce = async (plan: RunPlan): Promise<void> => {
     abort = new AbortController(); // fresh signal per attempt
+    snap.sessionId = plan.sessionId;
     snap.bucket = plan.bucket;
     snap.uploadPath = plan.uploadPath;
     snap.metadataBundleSha256 = plan.metadataBundleSha256;
@@ -397,6 +408,7 @@ function makeRunner(
     } else {
       let next = 0;
       let fatal: unknown = null;
+      let fileFailures = 0;
       const lane = async (): Promise<void> => {
         for (;;) {
           if (cancelled || fatal) return;
@@ -406,11 +418,24 @@ function makeRunner(
           try {
             await processItem(plan.sessionId, byId.get(it.id)!, it);
           } catch (err) {
-            if (!fatal) {
-              fatal = err;
-              abort.abort(); // stop sibling lanes' in-flight requests at once
+            if (cancelled || abort.signal.aborted) return;
+            if (isRunFatalBlobError(err)) {
+              if (!fatal) {
+                fatal = err;
+                abort.abort(); // stop sibling lanes' in-flight requests at once
+              }
+              return;
             }
-            return;
+            fileFailures++;
+            if (fileFailures >= MAX_FILE_FAILURES && !fatal) {
+              fatal = new Error(
+                `aborted after ${MAX_FILE_FAILURES} file failures — the problem looks systemic, not per-file`,
+              );
+              abort.abort(); // stop sibling lanes' in-flight requests at once
+              return;
+            }
+            if (fatal) return;
+            continue;
           }
         }
       };
@@ -420,6 +445,17 @@ function makeRunner(
     }
 
     if (cancelled) throw new Error('cancelled');
+
+    const failed = snap.files.filter((f) => f.state === 'failed').length;
+    if (failed > 0) {
+      log(
+        'warn',
+        `${failed} files failed — metadata not written; retry the failed files to complete the upload`,
+      );
+      snap.phase = 'partial';
+      emit(true);
+      return;
+    }
 
     // --- Phase 2: metadata, in publish order ---
     snap.phase = 'metadata';
@@ -477,6 +513,7 @@ export function runUpload(
 
   const done = (async () => {
     const sessionId = crypto.randomUUID();
+    runner.snap.sessionId = sessionId;
     let now = new Date();
     for (let stamp = 0; ; stamp++) {
       const bundle = await buildBundle({ ...build, now });
@@ -520,10 +557,12 @@ export function runUpload(
 
       try {
         await runner.runOnce(plan);
-        runner.snap.phase = 'done';
-        if (persist) await markBatchComplete(sessionId, new Date().toISOString());
-        runner.log('info', dryRun ? 'dry-run complete — nothing written' : `published ${bundle.uploadPath}/`);
-        runner.emit(true);
+        if (runner.snap.phase !== 'partial') {
+          runner.snap.phase = 'done';
+          if (persist) await markBatchComplete(sessionId, new Date().toISOString());
+          runner.log('info', dryRun ? 'dry-run complete — nothing written' : `published ${bundle.uploadPath}/`);
+          runner.emit(true);
+        }
         return;
       } catch (err) {
         if (runner.isCancelled()) {
@@ -565,6 +604,7 @@ export function resumeUpload(
     isResume: true,
     dryRun: false,
   });
+  runner.snap.sessionId = batch.id;
 
   const plan: RunPlan = {
     sessionId: batch.id,
@@ -593,10 +633,12 @@ export function resumeUpload(
     try {
       runner.log('info', `resuming ${batch.uploadPrefix}/`);
       await runner.runOnce(plan);
-      runner.snap.phase = 'done';
-      await markBatchComplete(batch.id, new Date().toISOString());
-      runner.log('info', `published ${batch.uploadPrefix}/`);
-      runner.emit(true);
+      if (runner.snap.phase !== 'partial') {
+        runner.snap.phase = 'done';
+        await markBatchComplete(batch.id, new Date().toISOString());
+        runner.log('info', `published ${batch.uploadPrefix}/`);
+        runner.emit(true);
+      }
     } catch (err) {
       if (runner.isCancelled()) {
         runner.snap.phase = 'error';

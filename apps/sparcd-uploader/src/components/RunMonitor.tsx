@@ -128,6 +128,7 @@ export function RunMonitor({ snap }: { snap: UploadSnapshot }) {
     (a, f) => ((a[f.state] = (a[f.state] ?? 0) + 1), a),
     {} as Record<FileState, number>,
   );
+  const failed = counts.failed ?? 0;
   const pct = snap.totalBytes > 0 ? (snap.uploadedBytes / snap.totalBytes) * 100 : 0;
 
   return (
@@ -170,6 +171,12 @@ export function RunMonitor({ snap }: { snap: UploadSnapshot }) {
               ? `Dry run complete — ${snap.files.length} files would publish under ${snap.uploadPath}/. Nothing was written.`
               : `Published ${snap.files.length} files under ${snap.uploadPath}/. Bundle hash ${snap.metadataBundleSha256?.slice(0, 16)}…`
           }
+        />
+      )}
+      {snap.phase === 'partial' && (
+        <Note
+          tone="warn"
+          message={`${failed} of ${snap.files.length} files failed to upload — the rest are stored. Metadata was not published, so this upload is not yet visible; retry the failed files to complete it.`}
         />
       )}
       {snap.phase === 'error' && <Note tone="warn" message={snap.error ?? 'Upload failed.'} />}

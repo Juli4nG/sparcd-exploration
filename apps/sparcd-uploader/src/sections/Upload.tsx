@@ -4,7 +4,8 @@ import { useLocations } from '../lib/useLocations';
 import { useCollections } from '../lib/useCollections';
 import { sanitizeUploaderUser } from '../lib/normalize';
 import { formatBytes } from '../lib/scanFiles';
-import { runUpload, type UploadRun, type UploadSnapshot } from '../lib/upload';
+import { loadSession } from '../lib/db';
+import { resumeUpload, runUpload, type UploadRun, type UploadSnapshot } from '../lib/upload';
 import { captureTimeComplete } from '../lib/validation';
 import { Note, RunMonitor } from '../components/RunMonitor';
 
@@ -69,6 +70,19 @@ export function Upload() {
       setSnap,
     );
     runRef.current = run;
+  };
+
+  const retryPending = useRef(false);
+  const retryFailed = async () => {
+    // The async gap before resumeUpload's first emit leaves the Retry button
+    // mounted — guard so a double-click can't start two concurrent runs.
+    if (!snap || !s3Config || retryPending.current) return;
+    retryPending.current = true;
+    const session = await loadSession(snap.sessionId);
+    const attached = new Map(files.map((f) => [f.relPath, f.file]));
+    // Partial wet runs persist before uploading, so the ledger is present here.
+    runRef.current = resumeUpload({ config: s3Config, session: session!, attached, concurrency }, setSnap);
+    retryPending.current = false;
   };
 
   if (!location || !collection || !slug) {
@@ -183,6 +197,13 @@ export function Upload() {
               className="bg-ink text-paper border border-ink px-3.5 py-2.5 sm:py-1.5 min-h-[44px] sm:min-h-0 text-[14px] font-body font-[600] hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
             >
               Next batch
+            </button>
+          ) : snap?.phase === 'partial' && !snap.dryRun ? (
+            <button
+              onClick={retryFailed}
+              className="bg-ink text-paper border border-ink px-3.5 py-2.5 sm:py-1.5 min-h-[44px] sm:min-h-0 text-[14px] font-body font-[600] hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+            >
+              Retry failed files
             </button>
           ) : (
             <button
