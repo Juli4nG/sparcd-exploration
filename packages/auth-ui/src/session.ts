@@ -61,6 +61,25 @@ function getChannel(): BroadcastChannel | null {
   return channel;
 }
 
+// A BroadcastChannel object never receives the messages it posts itself —
+// correct for `subscribeSharedConnection`'s cross-tab job, but it means
+// nothing in THIS tab can learn of THIS tab's own connect that way. An
+// event-based fix would still race: `connect()` calls `saveSharedConnection`
+// BEFORE the store sets `s3Config`, and `ConnectionChip` only mounts (and
+// could only subscribe) AFTER `s3Config` goes non-null — so it's never
+// listening in time to catch its own notification. A plain synchronous
+// module-level value sidesteps the race entirely: by the time anything
+// reads it, `connect()`'s call to `saveSharedConnection` has already
+// returned, same call stack, no event to miss.
+let liveConfig: S3Config | null = null;
+
+/** The current tab's own live connection, if any — including the secret,
+ *  so read this only to answer "am I connected" / "what am I connected to
+ *  right now", never to display it. */
+export function getLiveConnection(): S3Config | null {
+  return liveConfig;
+}
+
 /**
  * Live-relays the full config (secret included) to any other tab open right
  * now — nothing secret ever hits disk — and, only when `remember` is true,
@@ -73,6 +92,7 @@ export function saveSharedConnection(cfg: S3Config, remember: boolean): void {
   const { secretKey: _secretKey, ...persisted } = cfg;
   if (remember) savePersistedConnection(persisted);
   else clearPersistedConnection();
+  liveConfig = cfg;
   getChannel()?.postMessage({ type: 'connect', config: cfg } satisfies LiveMessage);
 }
 
@@ -84,6 +104,7 @@ export function saveSharedConnection(cfg: S3Config, remember: boolean): void {
  * again with "Remember me" unchecked (see `saveSharedConnection`).
  */
 export function clearSharedConnection(): void {
+  liveConfig = null;
   getChannel()?.postMessage({ type: 'disconnect' } satisfies LiveMessage);
 }
 
