@@ -707,6 +707,17 @@ export function runStreamingUpload(
     enqueuedIds.add(f.id);
     const item = planItemFor(f, naming, build.timeZone);
     queue.push({ ...item, doneAlready: false });
+    // Flip the display row the moment a file is actually queued, not when a
+    // lane eventually dequeues it — the queue is FIFO and only `concurrency`
+    // lanes drain it, so a file queued behind a large head-of-line batch
+    // would otherwise look stuck on "inspecting" long after Inspect finished
+    // it. (No-op before `runStreaming` seeds `snap.files` — the initial
+    // per-file state already accounts for files ready at that point.)
+    const idx = runner.snap.files.findIndex((fp) => fp.id === item.id);
+    if (idx >= 0 && runner.snap.files[idx].state === 'inspecting') {
+      runner.snap.files[idx] = { ...runner.snap.files[idx], key: item.key, state: 'pending' };
+      runner.emit(true);
+    }
     if (persist) void markFileState(fileRecordId(sessionId, item.localPath), fileRecordFor(sessionId, item, 'pending'));
   };
 
