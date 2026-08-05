@@ -50,6 +50,17 @@ function ProgressList({ snap }: { snap: UploadSnapshot }) {
     overscan: 12,
   });
 
+  // Follow the run: keep the first not-yet-settled file in view, at the top,
+  // so everything above it is already done/skipped/failed and everything
+  // below hasn't started — the user never has to scroll to watch it work.
+  useEffect(() => {
+    const activeIndex = files.findIndex(
+      (f) => f.state !== 'done' && f.state !== 'skipped' && f.state !== 'failed',
+    );
+    if (activeIndex >= 0) virtualizer.scrollToIndex(activeIndex, { align: 'start' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.version]);
+
   return (
     <div
       ref={parentRef}

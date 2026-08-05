@@ -15,6 +15,7 @@ import {
 import { onFilesReady } from '../lib/processing';
 import { captureTimeComplete, processingComplete } from '../lib/validation';
 import { Note, RunMonitor } from '../components/RunMonitor';
+import { MetadataPreview } from '../components/MetadataPreview';
 
 const sectionLabel = 'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
 
@@ -44,6 +45,11 @@ export function Upload() {
   const collection =
     collections.data?.find((c) => c.key === selectedBucket || c.bucket === selectedBucket) ?? null;
   const effectiveDryRun = dryRun;
+
+  // Preview is opt-in — building it rebuilds the whole bundle. Unlike on
+  // Assign, nothing on this step is still being live-edited, so it just
+  // reflects the current files/description/etc. directly, no debounce needed.
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const [snap, setSnap] = useState<UploadSnapshot | null>(null);
   const runRef = useRef<UploadRun | StreamingUploadRun | null>(null);
@@ -189,13 +195,13 @@ export function Upload() {
             onChange={(e) => setDryRun(e.target.checked)}
             className="accent-accent"
           />
-          Dry run — log every PUT, write nothing
+          Test the upload, nothing is written
         </label>
 
         {!effectiveDryRun && (
           <Note
             tone="warn"
-            message={`Wet upload uses the connected credentials directly. The bucket must allow this web origin with CORS, and the credentials must permit append-only PUT/HEAD/LIST for ${collection.bucket}.`}
+            message={`If not testing the upload and it fails right away, that's usually a setup issue on the storage side, not something you did wrong. Contact your administrator and give them this collection ID: ${collection.bucket}.`}
           />
         )}
 
@@ -212,6 +218,38 @@ export function Upload() {
             message="One or more files still have no capture time — publishing will wait until every ready file has one. Go back to Assign to set it."
           />
         )}
+
+        <div className="space-y-2">
+          <h2 className={sectionLabel}>Preview</h2>
+          {previewOpen ? (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="font-body text-[12px] text-inkSoft hover:text-ink underline underline-offset-4 decoration-rule focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Hide preview
+              </button>
+              <MetadataPreview
+                location={location}
+                collectionUuid={collection.uuid}
+                bucket={collection.bucket}
+                uploaderSlug={slug}
+                description={description}
+                timeZone={uploadTimeZone}
+                files={files}
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPreviewOpen(true)}
+              className="w-full border border-rule bg-paper px-3 py-2.5 text-left font-body text-[13px] text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
+            >
+              Click to preview the generated bundle files (UploadMeta.json, deployments/media/observations CSVs)…
+            </button>
+          )}
+        </div>
 
         <div className="flex items-center gap-3">
           <label className="font-body text-[13px] text-inkSoft w-28">Concurrency</label>
