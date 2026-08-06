@@ -57,10 +57,10 @@ type UploaderState = {
   selectedBucket: string | null; // selected collection key `${bucket}::${uuid}` (Assign)
   uploadDescription: string; // free-text description for UploadMeta
   uploadTimeZone: string; // IANA zone EXIF naive times are interpreted in; default = browser zone
-  dryRun: boolean; // on by default; logs PUTs and writes nothing
+  dryRun: boolean; // off by default; when on, logs PUTs and writes nothing
   uploadConcurrency: number; // parallel blob lanes, 4–16
 
-  connect: (config: S3Config) => void;
+  connect: (config: S3Config, remember: boolean) => void;
   disconnect: () => void;
   setSection: (section: Section) => void;
   toggleTheme: () => void;
@@ -145,12 +145,12 @@ export const useStore = create<UploaderState>()(
       selectedBucket: null,
       uploadDescription: '',
       uploadTimeZone: localTimeZone(),
-      dryRun: true,
+      dryRun: false,
       uploadConcurrency: 8,
 
-      connect: (config) => {
+      connect: (config, remember) => {
         clearClientCache();
-        saveSharedConnection(config);
+        saveSharedConnection(config, remember);
         set((s) => ({
           s3Config: config,
           connectionId: s.connectionId + 1,
@@ -317,7 +317,22 @@ export const useStore = create<UploaderState>()(
     {
       name: 'sparcd-uploader-session',
       storage: createJSONStorage(() => sessionStorage),
-      partialize: (s) => ({ theme: s.theme, elevationUnit: s.elevationUnit }),
+      // Assign's controls (deployment, collection, uploader identity,
+      // timezone, description) are plain strings — safe to persist, unlike
+      // files/handles — and nextBatch() already keeps them in memory across
+      // batches with exactly this in mind; this just makes that survive a
+      // reload too. A stale selectedLocationKey/selectedBucket from a
+      // different connection is harmless: Assign already clears/reselects
+      // either one when it doesn't match the connected backend's data.
+      partialize: (s) => ({
+        theme: s.theme,
+        elevationUnit: s.elevationUnit,
+        uploaderUser: s.uploaderUser,
+        selectedLocationKey: s.selectedLocationKey,
+        selectedBucket: s.selectedBucket,
+        uploadDescription: s.uploadDescription,
+        uploadTimeZone: s.uploadTimeZone,
+      }),
     },
   ),
 );
