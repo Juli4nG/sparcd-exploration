@@ -1,20 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useStore } from '../store';
 import { useLocations } from '../lib/useLocations';
 import { useCollections, useCollectionDeployments } from '../lib/useCollections';
 import { DeploymentPicker } from '../components/DeploymentPicker';
 import { CollectionPicker } from '../components/CollectionPicker';
-import { MetadataPreview } from '../components/MetadataPreview';
 import { CaptureTimeEditor } from '../components/CaptureTimeEditor';
 import { sanitizeUploaderUser } from '../lib/normalize';
 import { supportedTimeZones } from '../lib/exifTime';
 import { timeZoneForCoords } from '../lib/coords';
 import { captureTimeComplete } from '../lib/validation';
-
-// How long to wait after the last keystroke before pushing a fresh value into
-// an already-open preview — keeps it feeling live without rebuilding the whole
-// bundle on every keystroke.
-const PREVIEW_DEBOUNCE_MS = 300;
 
 const sectionLabel =
   'font-[600] text-[11px] tracking-[0.16em] uppercase text-inkSoft mb-2';
@@ -108,34 +102,6 @@ export function Assign() {
     setStep('upload');
   }
 
-  // Preview is opt-in (building it rebuilds the whole bundle) and, once open,
-  // only takes the live name/description on a short pause or on blur — not on
-  // every keystroke.
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewSlug, setPreviewSlug] = useState(slug);
-  const [previewDescription, setPreviewDescription] = useState(description);
-
-  useEffect(() => {
-    if (!previewOpen) return;
-    const t = window.setTimeout(() => {
-      setPreviewSlug(slug);
-      setPreviewDescription(description);
-    }, PREVIEW_DEBOUNCE_MS);
-    return () => window.clearTimeout(t);
-  }, [slug, description, previewOpen]);
-
-  function openPreview() {
-    setPreviewSlug(slug);
-    setPreviewDescription(description);
-    setPreviewOpen(true);
-  }
-
-  function flushPreview() {
-    if (!previewOpen) return;
-    setPreviewSlug(slug);
-    setPreviewDescription(description);
-  }
-
   // The chosen zone is always offered even if it isn't in the platform's list.
   const timeZones = useMemo(() => {
     const all = supportedTimeZones();
@@ -224,20 +190,16 @@ export function Assign() {
       <section>
         <h2 className={sectionLabel}>Uploader</h2>
         <input
+          id="uploaderUser"
+          name="uploaderUser"
+          autoComplete="name"
           value={uploaderUser}
           onChange={(e) => setUploaderUser(e.target.value)}
-          onBlur={flushPreview}
           placeholder="e.g. John Doe"
           className="w-full border border-rule bg-paper px-3 py-2 font-body text-[14px] text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
         />
         <p className="font-body text-[12px] text-inkMute mt-1.5">
-          Stamped into the upload prefix and object keys as{' '}
-          {slug ? (
-            <span className="font-mono text-inkSoft">{slug}</span>
-          ) : (
-            <span className="italic">a key-safe slug</span>
-          )}
-          . Set a default in Settings.
+          Defaults to your access key unless you set one in Settings.
         </p>
       </section>
 
@@ -255,9 +217,8 @@ export function Assign() {
           ))}
         </select>
         <p className="font-body text-[12px] text-inkMute mt-1.5">
-          EXIF times are wall-clock with no zone. Interpreting them in this zone fixes the stored
-          capture instant (DST-aware). Defaults to this machine’s zone; change it to the camera’s
-          zone when they differ.
+          Defaults to the selected deployment location's zone — change it here if the camera's
+          clock was actually set to a different one.
         </p>
       </section>
 
@@ -271,55 +232,21 @@ export function Assign() {
       <section>
         <h2 className={sectionLabel}>Description</h2>
         <textarea
+          id="uploadDescription"
+          name="uploadDescription"
+          autoComplete="on"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          onBlur={flushPreview}
           rows={3}
           placeholder="What this batch is — site, date range, notes."
           className="w-full border border-rule bg-paper px-3 py-2 font-body text-[14px] text-ink resize-y focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
         />
         <p className="font-body text-[12px] text-inkMute mt-1.5">
-          Saved to <span className="font-mono">UploadMeta.json</span> as the upload description.
+          Mountain Range - Site Name - No. of images collected - Date Uploaded - Date collected
         </p>
-      </section>
-
-      <section>
-        <h2 className={sectionLabel}>Preview</h2>
-        {location && collection && slug ? (
-          previewOpen ? (
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => setPreviewOpen(false)}
-                className="font-body text-[12px] text-inkSoft hover:text-ink underline underline-offset-4 decoration-rule focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-              >
-                Hide preview
-              </button>
-              <MetadataPreview
-                location={location}
-                collectionUuid={collection.uuid}
-                bucket={collection.bucket}
-                uploaderSlug={previewSlug}
-                description={previewDescription}
-                timeZone={uploadTimeZone}
-                files={files}
-              />
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={openPreview}
-              className="w-full border border-rule bg-paper px-3 py-2.5 text-left font-body text-[13px] text-inkSoft hover:text-ink hover:border-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-1"
-            >
-              Click to preview the generated bundle files (UploadMeta.json, deployments/media/observations CSVs)…
-            </button>
-          )
-        ) : (
-          <LocationsState
-            tone="mute"
-            message="Select a deployment, a target collection, and an uploader identity to preview the bundle."
-          />
-        )}
+        <p className="font-body text-[12px] text-inkMute">
+          (e.g.: Santa Rita Mountains - SAN06 - 39 images - uploaded 04-10-2020 - collected 03-28-2000)
+        </p>
       </section>
 
       <div className="flex items-center justify-between gap-4 border-t border-ruleSoft pt-5">
