@@ -45,6 +45,51 @@ export function Upload() {
   // Abandon an in-flight run if the step unmounts.
   useEffect(() => () => runRef.current?.cancel(), []);
 
+  // Hold a screen wake lock while actively uploading, so OS/display idle-sleep
+  // doesn't interrupt it. Best-effort: unsupported browsers (Firefox, as of
+  // this writing) and rejected requests (e.g. low battery) just mean no lock —
+  // never fatal to the upload itself. The lock is auto-released by the browser
+  // whenever the tab is hidden, so it's re-acquired on regaining visibility.
+  //
+  // Caveats — cases this can't prevent: the tab being minimized/backgrounded
+  // (the lock releases the moment it's hidden), the laptop lid closing (a
+  // separate sleep trigger the OS honors regardless of any page's wake lock),
+  // and Firefox (no Wake Lock API support at all, so no lock is ever held
+  // there).
+  useEffect(() => {
+    if (!running || !('wakeLock' in navigator)) return;
+    let lock: WakeLockSentinel | null = null;
+    let cancelled = false;
+
+    const acquire = () => {
+      navigator.wakeLock
+        .request('screen')
+        .then((l) => {
+          if (cancelled) {
+            void l.release();
+          } else {
+            lock = l;
+          }
+        })
+        .catch(() => {
+          /* not fatal — e.g. low battery, or acquired while hidden */
+        });
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') acquire();
+    };
+
+    acquire();
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibility);
+      void lock?.release();
+    };
+  }, [running]);
+
   const ready = useMemo(() => files.filter((f) => f.processState === 'ready' && f.sha256), [files]);
 
   const start = () => {
