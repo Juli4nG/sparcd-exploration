@@ -97,6 +97,34 @@ export function Upload() {
     }
   };
 
+  // Self-heal after an interruption the user might not notice — a run that
+  // landed on 'partial' (some files failed after exhausting their own
+  // retries) resumes automatically instead of waiting for them to notice and
+  // click Retry. Only 'partial' — not the fatal 'error' phase, which usually
+  // means credentials/CORS/policy, not a transient blip a blind retry would
+  // fix.
+  //
+  // "Wakes up" on either of two edge-triggered signals, whichever comes
+  // first: the tab regaining visibility (covers minimize/lid-close/sleep —
+  // the OS resumes and the visibilitychange fires), or the browser's `online`
+  // event (covers a network drop that resolves while the tab stayed visible
+  // the whole time, e.g. wifi flapping). Both conditions (visible AND online)
+  // are re-checked at the moment either fires, so a machine that wakes with
+  // wifi still reconnecting won't retry until `online` actually follows.
+  useEffect(() => {
+    const tryAutoResume = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine && snap?.phase === 'partial' && !snap.dryRun) {
+        void retryFailed();
+      }
+    };
+    document.addEventListener('visibilitychange', tryAutoResume);
+    window.addEventListener('online', tryAutoResume);
+    return () => {
+      document.removeEventListener('visibilitychange', tryAutoResume);
+      window.removeEventListener('online', tryAutoResume);
+    };
+  });
+
   if (!location || !collection || !slug) {
     return (
       <div className="max-w-2xl mx-auto space-y-4">
